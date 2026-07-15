@@ -6,6 +6,8 @@ This project is designed to be copied once with the complete working library and
 
 `Create Transfer Copy.command` copies the current code, `data/`, reference media, generated files, project resources, and clean update metadata. The current transfer payload is approximately 5.5 GB.
 
+That includes all product folders and source images, generated shots and their metadata, job history and product state, the background manifest and its image/prompt library, label logo, master shots, and local `artifacts/` logs. Background-library paths are automatically relocated when the copied folder runs from a different path or Mac username.
+
 The transfer intentionally excludes:
 
 - `app/.env.local`, because it contains private per-Mac configuration and may contain an API key;

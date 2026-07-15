@@ -98,6 +98,43 @@ function resolveExternalPath(inputPath: string, baseDir = process.cwd()) {
   return path.resolve(baseDir, trimmed);
 }
 
+function copiedProjectDataPath(productRoot: string, inputPath: string) {
+  const dataRoot = path.dirname(productRoot);
+  if (path.basename(dataRoot) !== "data" || !path.isAbsolute(inputPath)) {
+    return null;
+  }
+
+  const pathParts = path.relative(path.parse(inputPath).root, inputPath).split(path.sep);
+  const dataIndex = pathParts.lastIndexOf("data");
+  if (dataIndex < 0) {
+    return null;
+  }
+
+  return path.join(path.dirname(dataRoot), ...pathParts.slice(dataIndex));
+}
+
+async function resolvePortableProjectPath(inputPath: string, productRoot: string, baseDir = process.cwd()) {
+  const resolved = resolveExternalPath(inputPath, baseDir);
+  const copiedPath = copiedProjectDataPath(productRoot, resolved);
+
+  // Background manifests created on another Mac used to contain absolute paths.
+  // Prefer the equivalent file in this project's data folder when it exists.
+  if (copiedPath && copiedPath !== resolved && await pathExists(copiedPath)) {
+    return copiedPath;
+  }
+
+  return resolved;
+}
+
+async function relocatePersistedPaths(productRoot: string, state: PersistedBackgroundState) {
+  if (state.manifestPath) {
+    state.manifestPath = await resolvePortableProjectPath(state.manifestPath, productRoot);
+  }
+  if (state.labelLogoPath) {
+    state.labelLogoPath = await resolvePortableProjectPath(state.labelLogoPath, productRoot);
+  }
+}
+
 function assertString(value: unknown, field: string, lineNumber: number) {
   if (typeof value !== "string" || !value.trim()) {
     throw validationError("INVALID_BACKGROUND_MANIFEST", `Line ${lineNumber}: ${field} must be a non-empty string.`);
@@ -105,7 +142,12 @@ function assertString(value: unknown, field: string, lineNumber: number) {
   return value.trim();
 }
 
-async function parseManifestLine(line: string, lineNumber: number, manifestDir: string): Promise<ParsedManifestEntry> {
+async function parseManifestLine(
+  line: string,
+  lineNumber: number,
+  manifestDir: string,
+  productRoot: string
+): Promise<ParsedManifestEntry> {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(line) as Record<string, unknown>;
@@ -118,11 +160,11 @@ async function parseManifestLine(line: string, lineNumber: number, manifestDir: 
   const title = assertString(parsed.title, "title", lineNumber);
   const promptPath =
     typeof parsed.promptPath === "string" && parsed.promptPath.trim()
-      ? resolveExternalPath(parsed.promptPath, manifestDir)
+      ? await resolvePortableProjectPath(parsed.promptPath, productRoot, manifestDir)
       : null;
   const previewImagePath =
     typeof parsed.previewImagePath === "string" && parsed.previewImagePath.trim()
-      ? resolveExternalPath(parsed.previewImagePath, manifestDir)
+      ? await resolvePortableProjectPath(parsed.previewImagePath, productRoot, manifestDir)
       : null;
   const inlinePrompt = typeof parsed.prompt === "string" ? parsed.prompt.trim() : "";
   const prompt = promptPath ? (await fs.readFile(promptPath, "utf8")).trim() : inlinePrompt;
@@ -173,6 +215,7 @@ export async function scanBackgroundLibrary({
   productRoot: string;
 }): Promise<LoadedBackgroundLibraryState> {
   const state = await loadPersisted(productRoot);
+  await relocatePersistedPaths(productRoot, state);
   const errors: string[] = [];
   let manifestMtimeMs: number | null = null;
   let manifestSha256: string | null = null;
@@ -196,7 +239,7 @@ export async function scanBackgroundLibrary({
           .split(/\r?\n/)
           .map((line, index) => ({ line: line.trim(), lineNumber: index + 1 }))
           .filter(({ line }) => line && !line.startsWith("#"))
-          .map(({ line, lineNumber }) => parseManifestLine(line, lineNumber, manifestDir))
+          .map(({ line, lineNumber }) => parseManifestLine(line, lineNumber, manifestDir, productRoot))
       );
 
       for (const entry of parsedEntries) {
@@ -307,6 +350,8 @@ export async function getLabelLogoSnapshot({
   productRoot: string;
 }): Promise<GenerationLabelLogoSnapshot | null> {
   const state = await loadPersisted(productRoot);
+  await relocatePersistedPaths(productRoot, state);
+  await savePersisted(productRoot, state);
   if (!state.labelLogoPath) return null;
   if (!(await pathExists(state.labelLogoPath))) return null;
   return {

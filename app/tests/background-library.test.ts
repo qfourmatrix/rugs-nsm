@@ -180,4 +180,54 @@ describe("background library", () => {
       mimeType: "image/png"
     });
   });
+
+  it("relocates copied project data paths from another Mac", async () => {
+    const oldProjectRoot = path.join(workspace, "owner", "RUGS NSM");
+    const copiedProjectRoot = path.join(workspace, "friend", "RUGS NSM");
+    productRoot = path.join(copiedProjectRoot, "data", "nsm100k");
+    libraryDir = path.join(copiedProjectRoot, "data", "Preping bgs", "Living");
+    manifestPath = path.join(productRoot, "background-library.jsonl");
+    const promptPath = path.join(libraryDir, "living.txt");
+    const previewPath = path.join(libraryDir, "living.jpg");
+    const labelPath = path.join(productRoot, "label-logo.png");
+
+    await mkdir(path.join(productRoot, ".product-shot-queue"), { recursive: true });
+    await mkdir(libraryDir, { recursive: true });
+    await writeFile(promptPath, "Copied living room prompt");
+    await writeFakeImage(previewPath);
+    await writeFakeImage(labelPath);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        id: "living-copied",
+        type: "living",
+        title: "Copied Living Room",
+        promptPath: path.join(oldProjectRoot, "data", "Preping bgs", "Living", "living.txt"),
+        previewImagePath: path.join(oldProjectRoot, "data", "Preping bgs", "Living", "living.jpg")
+      })}\n`
+    );
+    await writeFile(
+      path.join(productRoot, ".product-shot-queue", "background-library.json"),
+      JSON.stringify({
+        version: 1,
+        manifestPath: path.join(oldProjectRoot, "data", "nsm100k", "background-library.jsonl"),
+        labelLogoPath: path.join(oldProjectRoot, "data", "nsm100k", "label-logo.png"),
+        seen: {},
+        usage: {}
+      })
+    );
+
+    const library = await scanBackgroundLibrary({ productRoot });
+    const label = await getLabelLogoSnapshot({ productRoot });
+
+    expect(library.errors).toEqual([]);
+    expect(library.manifestPath).toBe(manifestPath);
+    expect(library.labelLogoPath).toBe(labelPath);
+    expect(library.backgrounds[0]).toMatchObject({
+      prompt: "Copied living room prompt",
+      promptPath,
+      previewImagePath: previewPath
+    });
+    expect(label?.path).toBe(labelPath);
+  });
 });
