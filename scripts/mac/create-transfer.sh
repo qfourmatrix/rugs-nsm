@@ -5,6 +5,10 @@ source "$(cd "$(dirname "$0")" && pwd -P)/common.sh"
 
 heading "RUGS NSM — Create Full Transfer Copy"
 
+command -v git >/dev/null 2>&1 || die "Git is required to create clean update metadata for the recipient copy."
+tracked_changes="$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=no)"
+[[ -z "$tracked_changes" ]] || die "Commit or revert tracked app-code changes before creating a transfer copy."
+
 if [[ "${RUGS_NONINTERACTIVE:-0}" == "1" ]]; then
   [[ -n "${RUGS_TRANSFER_DESTINATION:-}" ]] || die "Set RUGS_TRANSFER_DESTINATION for a non-interactive transfer test."
   selected_parent="$RUGS_TRANSFER_DESTINATION"
@@ -16,14 +20,24 @@ selected_parent="${selected_parent%/}"
 timestamp="$(date '+%Y-%m-%d %H%M%S')"
 destination="$selected_parent/RUGS NSM Transfer $timestamp"
 
-[[ "$destination" != "$PROJECT_ROOT" ]] || die "Choose a destination outside the current project folder."
-mkdir -p "$destination"
+case "$destination/" in
+  "$PROJECT_ROOT/"*) die "Choose a destination outside the current project folder." ;;
+esac
 
 printf 'Copying the complete working library to:\n%s\n\n' "$destination"
 printf 'This can take several minutes because the current data library is large.\n'
 
+git clone --quiet --no-hardlinks "$PROJECT_ROOT" "$destination"
+source_remote="$(git -C "$PROJECT_ROOT" remote get-url origin 2>/dev/null || true)"
+if [[ -n "$source_remote" ]]; then
+  git -C "$destination" remote set-url origin "$source_remote"
+else
+  git -C "$destination" remote remove origin
+fi
+
 rsync -a \
   --exclude '.DS_Store' \
+  --exclude '/.git/' \
   --exclude '/.runtime/' \
   --exclude '/app/node_modules/' \
   --exclude '/app/.env' \
