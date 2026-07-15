@@ -1,0 +1,148 @@
+{
+  "sources": {
+    "trc_sitemap": "https://www.therugcompany.com/xmlsitemap.php?type=products&page=1",
+    "beni_collection": "https://www.benirugs.com/collections/shop-all"
+  },
+  "trc": {
+    "products_with_gallery": 13,
+    "images_by_kind": {
+      "flatshot": 27,
+      "lifestyle-detail": 18,
+      "hero-roomset": 9,
+      "sidepile": 17,
+      "closeup": 16,
+      "landscape-roomset": 5
+    },
+    "sample_products": [
+      {
+        "name": "Runa Pistachio",
+        "url": "https://www.therugcompany.com/4786-runa-pistachio.html",
+        "image_count": 6
+      },
+      {
+        "name": "Spectra Ivory",
+        "url": "https://www.therugcompany.com/4739-spectra-ivory.html",
+        "image_count": 6
+      },
+      {
+        "name": "Veloura Steel",
+        "url": "https://www.therugcompany.com/8178-veloura-steel.html",
+        "image_count": 6
+      },
+      {
+        "name": "Avalon Cool",
+        "url": "https://www.therugcompany.com/4760-avalon-cool.html",
+        "image_count": 7
+      },
+      {
+        "name": "Ariso Midnight",
+        "url": "https://www.therugcompany.com/2412-ariso-midnight.html",
+        "image_count": 8
+      },
+      {
+        "name": "Axis Autumn",
+        "url": "https://www.therugcompany.com/4799-axis-autumn.html",
+        "image_count": 9
+      },
+      {
+        "name": "Aspen Natural",
+        "url": "https://www.therugcompany.com/2453-aspen-natural.html",
+        "image_count": 7
+      },
+      {
+        "name": "H\u00e9l\u00e8ne Bold",
+        "url": "https://www.therugcompany.com/2428-helene-bold.html",
+        "image_count": 7
+      },
+      {
+        "name": "Imi Sea",
+        "url": "https://www.therugcompany.com/2300-imi-sea.html",
+        "image_count": 6
+      },
+      {
+        "name": "Riven Alabaster",
+        "url": "https://www.therugcompany.com/4790-riven-alabaster.html",
+        "image_count": 7
+      },
+      {
+        "name": "Kali Umber",
+        "url": "https://www.therugcompany.com/2527-kali-umber.html",
+        "image_count": 11
+      },
+      {
+        "name": "Micro Abaca Tobacco",
+        "url": "https://www.therugcompany.com/2364-micro-abaca-tobacco.html",
+        "image_count": 2
+      }
+    ]
+  },
+  "beni": {
+    "products_with_gallery": 47,
+    "images_by_kind": {
+      "flatshot": 47,
+      "roomset": 83
+    },
+    "sample_products": [
+      {
+        "name": "Aho",
+        "url": "https://www.benirugs.com/products/aho",
+        "image_count": 2
+      },
+      {
+        "name": "Austin",
+        "url": "https://www.benirugs.com/products/austin-oat-light-gray",
+        "image_count": 3
+      },
+      {
+        "name": "Austin - Runner",
+        "url": "https://www.benirugs.com/products/austin-oat-light-gray-runner",
+        "image_count": 3
+      },
+      {
+        "name": "Austin",
+        "url": "https://www.benirugs.com/products/austin-oat-midnight-black",
+        "image_count": 3
+      },
+      {
+        "name": "Austin - Runner",
+        "url": "https://www.benirugs.com/products/austin-oat-midnight-black-runner",
+        "image_count": 3
+      },
+      {
+        "name": "Austin",
+        "url": "https://www.benirugs.com/products/austin-oat-pinecone",
+        "image_count": 2
+      },
+      {
+        "name": "Austin - Runner",
+        "url": "https://www.benirugs.com/products/austin-oat-pinecone-runner",
+        "image_count": 2
+      },
+      {
+        "name": "Donny",
+        "url": "https://www.benirugs.com/products/donny-aubergine-moonscape",
+        "image_count": 2
+      },
+      {
+        "name": "Donny - Runner",
+        "url": "https://www.benirugs.com/products/donny-aubergine-moonscape-runner",
+        "image_count": 2
+      },
+      {
+        "name": "Donny",
+        "url": "https://www.benirugs.com/products/donny-marsh-eucalyptus",
+        "image_count": 2
+      },
+      {
+        "name": "Donny - Runner",
+        "url": "https://www.benirugs.com/products/donny-marsh-eucalyptus-runner",
+        "image_count": 2
+      },
+      {
+        "name": "Donny",
+        "url": "https://www.benirugs.com/products/donny-terracotta-rose-quartz",
+        "image_count": 2
+      }
+    ]
+  }
+}

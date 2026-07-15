@@ -1,0 +1,23 @@
+.DS_Store
+node_modules/
+dist/
+.runtime/
+artifacts/*
+!artifacts/README.md
+app/output/
+.env
+.env.local
+.env.*.local
+coverage/
+*.log
+
+# The complete working library is copied during the initial Mac handoff, but it
+# is never pulled from GitHub. This keeps updates from overwriting either
+# person's rugs, generation history, or local settings.
+data/*
+!data/README.md
+
+# Reference/source media is included by Create Transfer Copy.command, not Git.
+Inspo/
+Theme FIles/
+jpg
