@@ -7,7 +7,7 @@ Project workspace for the Product Shot Queue app and its local rug data. The app
 - `Create Transfer Copy.command`: creates a complete recipient copy containing the current rugs, images, generated files, resources, code, and update metadata.
 - `1 First Setup.command`: installs a verified private Node.js runtime and Mac-native dependencies without Homebrew or administrator access.
 - `2 Start RUGS NSM.command`: builds, starts, and opens the local app.
-- `3 Update RUGS NSM.command`: pulls approved code updates without replacing local data or secrets.
+- `3 Update RUGS NSM.command`: anonymously pulls approved code updates from the public repository without replacing local data or secrets; the recipient needs no GitHub account.
 
 See [MAC_HANDOFF.md](MAC_HANDOFF.md) for the owner and recipient workflow.
 

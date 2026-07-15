@@ -55,6 +55,7 @@ RUGS NSM — START HERE
 2. Control-click “1 First Setup.command” and choose Open.
 3. When setup finishes, double-click “2 Start RUGS NSM.command”.
 4. For future app updates, stop the running app and double-click “3 Update RUGS NSM.command”.
+5. No GitHub account or sign-in is needed for updates.
 
 Your rugs, generated files, settings, and API key stay local and are not replaced by code updates.
 EOF

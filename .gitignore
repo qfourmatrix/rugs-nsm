@@ -12,8 +12,8 @@ coverage/
 *.log
 
 # The complete working library is copied during the initial Mac handoff, but it
-# is never pulled from GitHub. This keeps updates from overwriting either
-# person's rugs, generation history, or local settings.
+# is never published to or pulled from GitHub. This keeps public code updates
+# from overwriting either person's rugs, generation history, or local settings.
 data/*
 !data/README.md
 
