@@ -27,7 +27,9 @@ esac
 printf 'Copying the complete working library to:\n%s\n\n' "$destination"
 printf 'This can take several minutes because the current data library is large.\n'
 
-git clone --quiet --no-hardlinks "$PROJECT_ROOT" "$destination"
+# --no-local forces Git to repack only the published branch instead of copying
+# Codex's internal local-object pack into the recipient folder.
+git clone --quiet --no-local "$PROJECT_ROOT" "$destination"
 source_remote="$(git -C "$PROJECT_ROOT" remote get-url origin 2>/dev/null || true)"
 if [[ -n "$source_remote" ]]; then
   git -C "$destination" remote set-url origin "$source_remote"
