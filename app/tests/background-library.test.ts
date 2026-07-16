@@ -10,7 +10,7 @@ import {
   setLabelLogoPath,
   toClientBackgroundLibraryState
 } from "../server/background-library";
-import { cleanupTempWorkspace, makeTempWorkspace, pathExists, writeFakeImage } from "./test-utils";
+import { cleanupTempWorkspace, makeTempWorkspace, pathExists, readJson, writeFakeImage } from "./test-utils";
 
 describe("background library", () => {
   let workspace: string;
@@ -219,6 +219,7 @@ describe("background library", () => {
 
     const library = await scanBackgroundLibrary({ productRoot });
     const label = await getLabelLogoSnapshot({ productRoot });
+    const background = await getBackgroundSnapshot({ productRoot, backgroundId: "living-copied" });
 
     expect(library.errors).toEqual([]);
     expect(library.manifestPath).toBe(manifestPath);
@@ -228,6 +229,15 @@ describe("background library", () => {
       promptPath,
       previewImagePath: previewPath
     });
-    expect(label?.path).toBe(labelPath);
+    expect(label?.path).toBe("label-logo.png");
+    expect(background?.previewImagePath).toBe(path.join("..", "Preping bgs", "Living", "living.jpg"));
+
+    const persisted = await readJson<{ manifestPath: string; labelLogoPath: string }>(
+      path.join(productRoot, ".product-shot-queue", "background-library.json")
+    );
+    expect(persisted).toMatchObject({
+      manifestPath: "background-library.jsonl",
+      labelLogoPath: "label-logo.png"
+    });
   });
 });

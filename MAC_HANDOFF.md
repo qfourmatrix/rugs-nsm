@@ -4,7 +4,7 @@ This project is designed to be copied once with the complete working library and
 
 ## What the transfer includes
 
-`Create Transfer Copy.command` copies the current code, `data/`, reference media, generated files, project resources, and clean update metadata. The current transfer payload is approximately 5.5 GB.
+`Create Transfer Copy.command` copies the current code, `data/`, reference media, generated files, project resources, and clean update metadata. The current transfer payload is approximately 6.6 GB.
 
 That includes all product folders and source images, generated shots and their metadata, job history and product state, the background manifest and its image/prompt library, label logo, master shots, and local `artifacts/` logs. Background-library paths are automatically relocated when the copied folder runs from a different path or Mac username.
 
@@ -13,13 +13,14 @@ The transfer intentionally excludes:
 - `app/.env.local`, because it contains private per-Mac configuration and may contain an API key;
 - `app/node_modules/`, because native dependencies such as Sharp must be installed for the recipient Mac;
 - `.runtime/`, because First Setup downloads the correct verified Node.js build for Apple Silicon or Intel;
-- `artifacts/dist/`, because it is recreated during setup.
+- `artifacts/dist/`, because it is recreated during setup;
+- `artifacts/runtime/`, because it contains owner-Mac process IDs and diagnostic launch logs rather than shot history.
 
 ## Owner: create the first copy
 
 1. Commit and push approved application changes to the public GitHub repository.
 2. Double-click `Create Transfer Copy.command`.
-3. Choose an external drive or another destination with at least 7 GB free.
+3. Choose an external drive or another destination with at least 9 GB free.
 4. Give the resulting `RUGS NSM Transfer …` folder to the recipient.
 
 The transfer copy includes ignored working data even though GitHub does not. Do not manually zip only the files visible in GitHub.

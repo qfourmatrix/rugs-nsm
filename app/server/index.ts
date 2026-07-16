@@ -22,6 +22,7 @@ import {
   getBackgroundSnapshot,
   getLabelLogoSnapshot,
   markBackgroundUsed,
+  resolveProductLibraryPath,
   resolveBackgroundPreviewPath,
   scanBackgroundLibrary,
   setBackgroundManifestPath,
@@ -525,12 +526,15 @@ async function runGeneration(item: QueuedGeneration) {
         };
       })
     );
-    const labelReference = item.labelLogo
+    const labelLogoPath = item.labelLogo
+      ? await resolveProductLibraryPath(item.labelLogo.path, config.productRoot)
+      : null;
+    const labelReference = item.labelLogo && labelLogoPath
       ? {
           file: item.labelLogo.file,
-          path: item.labelLogo.path,
+          path: labelLogoPath,
           mimeType: item.labelLogo.mimeType,
-          base64: await fs.readFile(item.labelLogo.path, "base64")
+          base64: await fs.readFile(labelLogoPath, "base64")
         }
       : null;
     const providerReferences = labelReference ? [labelReference, ...references] : references;

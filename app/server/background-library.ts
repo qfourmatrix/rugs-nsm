@@ -98,9 +98,28 @@ function resolveExternalPath(inputPath: string, baseDir = process.cwd()) {
   return path.resolve(baseDir, trimmed);
 }
 
-function copiedProjectDataPath(productRoot: string, inputPath: string) {
+function projectRootFromProductRoot(productRoot: string) {
   const dataRoot = path.dirname(productRoot);
-  if (path.basename(dataRoot) !== "data" || !path.isAbsolute(inputPath)) {
+  return path.basename(dataRoot) === "data" ? path.dirname(dataRoot) : null;
+}
+
+function portablePathFromProductRoot(productRoot: string, inputPath: string) {
+  const projectRoot = projectRootFromProductRoot(productRoot);
+  if (!projectRoot) {
+    return inputPath;
+  }
+
+  const projectRelative = path.relative(projectRoot, inputPath);
+  if (projectRelative === ".." || projectRelative.startsWith(`..${path.sep}`) || path.isAbsolute(projectRelative)) {
+    return inputPath;
+  }
+
+  return path.relative(productRoot, inputPath) || ".";
+}
+
+function copiedProjectDataPath(productRoot: string, inputPath: string) {
+  const projectRoot = projectRootFromProductRoot(productRoot);
+  if (!projectRoot || !path.isAbsolute(inputPath)) {
     return null;
   }
 
@@ -110,10 +129,14 @@ function copiedProjectDataPath(productRoot: string, inputPath: string) {
     return null;
   }
 
-  return path.join(path.dirname(dataRoot), ...pathParts.slice(dataIndex));
+  return path.join(projectRoot, ...pathParts.slice(dataIndex));
 }
 
-async function resolvePortableProjectPath(inputPath: string, productRoot: string, baseDir = process.cwd()) {
+export async function resolveProductLibraryPath(
+  inputPath: string,
+  productRoot: string,
+  baseDir = productRoot
+) {
   const resolved = resolveExternalPath(inputPath, baseDir);
   const copiedPath = copiedProjectDataPath(productRoot, resolved);
 
@@ -124,15 +147,6 @@ async function resolvePortableProjectPath(inputPath: string, productRoot: string
   }
 
   return resolved;
-}
-
-async function relocatePersistedPaths(productRoot: string, state: PersistedBackgroundState) {
-  if (state.manifestPath) {
-    state.manifestPath = await resolvePortableProjectPath(state.manifestPath, productRoot);
-  }
-  if (state.labelLogoPath) {
-    state.labelLogoPath = await resolvePortableProjectPath(state.labelLogoPath, productRoot);
-  }
 }
 
 function assertString(value: unknown, field: string, lineNumber: number) {
@@ -160,11 +174,11 @@ async function parseManifestLine(
   const title = assertString(parsed.title, "title", lineNumber);
   const promptPath =
     typeof parsed.promptPath === "string" && parsed.promptPath.trim()
-      ? await resolvePortableProjectPath(parsed.promptPath, productRoot, manifestDir)
+      ? await resolveProductLibraryPath(parsed.promptPath, productRoot, manifestDir)
       : null;
   const previewImagePath =
     typeof parsed.previewImagePath === "string" && parsed.previewImagePath.trim()
-      ? await resolvePortableProjectPath(parsed.previewImagePath, productRoot, manifestDir)
+      ? await resolveProductLibraryPath(parsed.previewImagePath, productRoot, manifestDir)
       : null;
   const inlinePrompt = typeof parsed.prompt === "string" ? parsed.prompt.trim() : "";
   const prompt = promptPath ? (await fs.readFile(promptPath, "utf8")).trim() : inlinePrompt;
@@ -191,7 +205,8 @@ export async function setBackgroundManifestPath({
   manifestPath: string;
 }): Promise<LoadedBackgroundLibraryState> {
   const state = await loadPersisted(productRoot);
-  state.manifestPath = resolveExternalPath(manifestPath);
+  const resolvedPath = await resolveProductLibraryPath(manifestPath, productRoot, process.cwd());
+  state.manifestPath = portablePathFromProductRoot(productRoot, resolvedPath);
   await savePersisted(productRoot, state);
   return scanBackgroundLibrary({ productRoot });
 }
@@ -204,7 +219,8 @@ export async function setLabelLogoPath({
   labelLogoPath: string;
 }): Promise<LoadedBackgroundLibraryState> {
   const state = await loadPersisted(productRoot);
-  state.labelLogoPath = resolveExternalPath(labelLogoPath);
+  const resolvedPath = await resolveProductLibraryPath(labelLogoPath, productRoot, process.cwd());
+  state.labelLogoPath = portablePathFromProductRoot(productRoot, resolvedPath);
   await savePersisted(productRoot, state);
   return scanBackgroundLibrary({ productRoot });
 }
@@ -215,23 +231,34 @@ export async function scanBackgroundLibrary({
   productRoot: string;
 }): Promise<LoadedBackgroundLibraryState> {
   const state = await loadPersisted(productRoot);
-  await relocatePersistedPaths(productRoot, state);
+  const manifestPath = state.manifestPath
+    ? await resolveProductLibraryPath(state.manifestPath, productRoot)
+    : null;
+  const labelLogoPath = state.labelLogoPath
+    ? await resolveProductLibraryPath(state.labelLogoPath, productRoot)
+    : null;
+  if (manifestPath) {
+    state.manifestPath = portablePathFromProductRoot(productRoot, manifestPath);
+  }
+  if (labelLogoPath) {
+    state.labelLogoPath = portablePathFromProductRoot(productRoot, labelLogoPath);
+  }
   const errors: string[] = [];
   let manifestMtimeMs: number | null = null;
   let manifestSha256: string | null = null;
   let backgrounds: LoadedBackgroundRecord[] = [];
   const scannedAt = new Date().toISOString();
 
-  if (state.manifestPath) {
+  if (manifestPath) {
     try {
-      const manifestStat = await fs.stat(state.manifestPath);
+      const manifestStat = await fs.stat(manifestPath);
       if (!manifestStat.isFile()) {
         throw validationError("INVALID_BACKGROUND_MANIFEST", "Background manifest path must point to a file.");
       }
       manifestMtimeMs = manifestStat.mtimeMs;
-      manifestSha256 = await sha256File(state.manifestPath);
-      const manifestDir = path.dirname(state.manifestPath);
-      const text = await fs.readFile(state.manifestPath, "utf8");
+      manifestSha256 = await sha256File(manifestPath);
+      const manifestDir = path.dirname(manifestPath);
+      const text = await fs.readFile(manifestPath, "utf8");
       const seenIds = new Set<string>();
 
       const parsedEntries = await Promise.all(
@@ -286,12 +313,12 @@ export async function scanBackgroundLibrary({
   );
 
   return {
-    manifestPath: state.manifestPath,
+    manifestPath,
     manifestMtimeMs,
     manifestSha256,
     scannedAt,
-    labelLogoPath: state.labelLogoPath,
-    labelLogoExists: state.labelLogoPath ? await pathExists(state.labelLogoPath) : false,
+    labelLogoPath,
+    labelLogoExists: labelLogoPath ? await pathExists(labelLogoPath) : false,
     backgrounds,
     errors
   };
@@ -323,6 +350,8 @@ export async function getBackgroundSnapshot({
     title: background.title,
     prompt: background.prompt,
     previewImagePath: background.previewImagePath
+      ? portablePathFromProductRoot(productRoot, background.previewImagePath)
+      : null
   };
 }
 
@@ -350,15 +379,20 @@ export async function getLabelLogoSnapshot({
   productRoot: string;
 }): Promise<GenerationLabelLogoSnapshot | null> {
   const state = await loadPersisted(productRoot);
-  await relocatePersistedPaths(productRoot, state);
+  const labelLogoPath = state.labelLogoPath
+    ? await resolveProductLibraryPath(state.labelLogoPath, productRoot)
+    : null;
+  if (labelLogoPath) {
+    state.labelLogoPath = portablePathFromProductRoot(productRoot, labelLogoPath);
+  }
   await savePersisted(productRoot, state);
-  if (!state.labelLogoPath) return null;
-  if (!(await pathExists(state.labelLogoPath))) return null;
+  if (!labelLogoPath) return null;
+  if (!(await pathExists(labelLogoPath))) return null;
   return {
-    file: path.basename(state.labelLogoPath),
-    path: state.labelLogoPath,
-    sha256: await sha256File(state.labelLogoPath),
-    mimeType: imageMimeType(state.labelLogoPath)
+    file: path.basename(labelLogoPath),
+    path: portablePathFromProductRoot(productRoot, labelLogoPath),
+    sha256: await sha256File(labelLogoPath),
+    mimeType: imageMimeType(labelLogoPath)
   };
 }
 

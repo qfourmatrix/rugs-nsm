@@ -46,16 +46,23 @@ rsync -a \
   --exclude '/app/.env.local' \
   --exclude '/app/.env.*.local' \
   --exclude '/artifacts/dist/' \
+  --exclude '/artifacts/runtime/' \
+  --exclude '/*.zip' \
   "$PROJECT_ROOT/" "$destination/"
 
 cat > "$destination/START HERE.txt" <<'EOF'
-RUGS NSM — START HERE
+RUGS NSM — COMPLETE COPY — START HERE
 
-1. Copy this whole folder from the external drive into your Mac's Documents folder.
-2. Control-click “1 First Setup.command” and choose Open.
-3. When setup finishes, double-click “2 Start RUGS NSM.command”.
-4. For future app updates, stop the running app and double-click “3 Update RUGS NSM.command”.
-5. No GitHub account or sign-in is needed for updates.
+This folder already contains the app code, products, images, generated shots,
+job history, logs, and the complete background library. Do not merge it with
+a GitHub ZIP or an older RUGS NSM folder.
+
+1. Rename the older/broken RUGS folder to “RUGS NSM OLD”.
+2. Copy this whole folder into your Mac's Documents folder.
+3. Control-click “1 First Setup.command” and choose Open.
+4. When setup finishes, double-click “2 Start RUGS NSM.command”.
+5. For future app updates, stop the app and run “3 Update RUGS NSM.command”.
+6. No GitHub account or sign-in is needed for updates.
 
 Your rugs, generated files, settings, and API key stay local and are not replaced by code updates.
 EOF
