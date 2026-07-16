@@ -36,6 +36,10 @@ if [[ -n "$source_remote" ]]; then
 else
   git -C "$destination" remote remove origin
 fi
+# A local clone records the owner's source folder in reflog text even after the
+# public remote is restored. Reflogs are disposable local history, so clear
+# them before handoff to keep the recipient copy free of owner-specific paths.
+git -C "$destination" reflog expire --expire=now --all
 
 rsync -a \
   --exclude '.DS_Store' \
