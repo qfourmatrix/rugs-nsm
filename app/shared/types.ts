@@ -9,6 +9,19 @@ export type JobStatus = "queued" | "generating" | "succeeded" | "failed" | "canc
 export type ShotAggregateState = "empty" | "generating" | "accepted" | "review_needed" | "failed" | "rejected_only";
 export type RugConstructionId = "flatweave" | "low_pile" | "high_pile" | "mixed_high_low" | "unknown_custom";
 export type RefinePatternMode = "symmetrical" | "asymmetrical" | "sos";
+export type ProductShape = "area" | "runner" | "round";
+export type ShapeVariantShape = Exclude<ProductShape, "area">;
+export type ShapeVariantStrategy = "auto" | "repeat_border" | "endcap" | "stripe_band" | "focal" | "asymmetrical";
+export type RoundEdgePolicy = "bound" | "preserve_source" | "radial_fringe";
+export type ShapeVariantStatus =
+  | "planned"
+  | "queued"
+  | "generating"
+  | "needs_review"
+  | "approved"
+  | "failed"
+  | "cancelled"
+  | "stale";
 
 export interface Shot {
   id: string;
@@ -16,6 +29,16 @@ export interface Shot {
   prompt: string;
   defaultAspectRatio: AspectRatio;
   defaultImageSize: ImageSize;
+}
+
+export interface ShotPromptOverride {
+  scene: string;
+  rug_placement: string;
+  camera: string;
+  lighting?: string;
+  styling?: string;
+  quality?: string;
+  output_requirements?: string;
 }
 
 export interface MasterShots {
@@ -35,8 +58,11 @@ export interface RefineSettings {
 export interface ProductSummary {
   id: string;
   name: string;
+  shape: ProductShape;
+  familyId: string;
+  sourceProductId: string;
   createdAt: string;
-  status: "ready" | "missing_base" | "duplicate_base";
+  status: "ready" | "missing_base" | "duplicate_base" | "invalid_variant";
   baseImage: string | null;
   referenceImages: string[];
   counts: {
@@ -47,6 +73,66 @@ export interface ProductSummary {
     running: number;
   };
   errors: string[];
+}
+
+export interface ShapeVariantMetadata {
+  version: 1;
+  familyId: string;
+  sourceProductId: string;
+  shape: ShapeVariantShape;
+  sourceBaseSha256: string;
+  approvedAssetId: string;
+  promptVersion: string;
+  createdAt: string;
+}
+
+export interface ShapeVariantDerivation {
+  familyId: string;
+  sourceProductId: string;
+  variantProductId: string;
+  shape: ShapeVariantShape;
+  strategy: ShapeVariantStrategy;
+  runnerRatio: number | null;
+  roundEdgePolicy: RoundEdgePolicy | null;
+  promptVersion: string;
+  runId: string;
+}
+
+export interface ShapeVariantRecord {
+  id: string;
+  familyId: string;
+  sourceProductId: string;
+  variantProductId: string;
+  shape: ShapeVariantShape;
+  status: ShapeVariantStatus;
+  strategy: ShapeVariantStrategy;
+  runnerRatio: number | null;
+  roundEdgePolicy: RoundEdgePolicy | null;
+  imageSize: Extract<ImageSize, "2K" | "4K">;
+  candidateCount: 1 | 2;
+  sourceBaseFile: string;
+  sourceBaseSha256: string;
+  promptVersion: string;
+  prompt: string;
+  candidateAssetIds: string[];
+  approvedAssetId: string | null;
+  activeRunId: string | null;
+  requestedCandidateCount: number;
+  completedCandidateCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShapeVariantCampaign {
+  version: 1;
+  updatedAt: string;
+  variants: ShapeVariantRecord[];
+}
+
+export interface ShapeVariantSummary {
+  records: ShapeVariantRecord[];
+  counts: Record<ShapeVariantStatus, number>;
 }
 
 export interface ProductState {
@@ -160,6 +246,7 @@ export interface AssetRecord {
     background?: GenerationBackgroundSnapshot | null;
     labelLogo?: GenerationLabelLogoSnapshot | null;
     construction?: GenerationConstructionSnapshot | null;
+    shapeVariant?: ShapeVariantDerivation | null;
   };
   output: {
     file: string;

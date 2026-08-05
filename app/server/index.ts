@@ -11,13 +11,30 @@ import type {
   ImageSize,
   JobRecord,
   ProductSummary,
+  ShapeVariantDerivation,
+  ShapeVariantRecord,
   SosCustomPalette,
   SosPaletteId,
   Shot
 } from "../shared/types";
 import { composeSosRefinePrompt } from "../shared/sos-palettes";
 import { BACKGROUND_REQUIRED_SHOT_IDS, LABEL_REQUIRED_SHOT_IDS, RUG_CONSTRUCTION_OPTIONS } from "../shared/constants";
-import { BulkGenerateRequestSchema, GenerateRequestSchema, RefineRequestSchema } from "../shared/schemas";
+import { resolveShapeShotContext } from "../shared/shape-shot-prompts";
+import {
+  BulkGenerateRequestSchema,
+  GenerateRequestSchema,
+  RefineRequestSchema,
+  ShapeVariantApproveRequestSchema,
+  ShapeVariantGenerateRequestSchema,
+  ShapeVariantPrepareRequestSchema,
+  ShapeVariantShotsBatchRequestSchema
+} from "../shared/schemas";
+import {
+  buildShapeVariantPrompt,
+  promptVersionForShape,
+  shotIdForShape,
+  shotNameForShape
+} from "../shared/shape-variants";
 import {
   getBackgroundSnapshot,
   getLabelLogoSnapshot,
@@ -29,7 +46,7 @@ import {
   setLabelLogoPath,
   toClientBackgroundLibraryState
 } from "./background-library";
-import { buildAssetBasename, listGeneratedAssets, saveAsset, writeOutputImage } from "./asset-store";
+import { buildAssetBasename, getAssetRecord, listGeneratedAssets, rejectAsset, saveAsset, writeOutputImage } from "./asset-store";
 import { config, clampQueueConcurrency } from "./config";
 import { asyncRoute, conflictError, errorMiddleware, notFoundError, validationError } from "./errors";
 import { ensureDir, imageMimeType, pathExists, safeChildPath, sha256File, SUPPORTED_IMAGE_EXTENSIONS } from "./fsUtils";
@@ -48,6 +65,16 @@ import {
   REFINE_SHOT_ID
 } from "./refine-artifacts";
 import { redactSecrets } from "./security";
+import { hideShapeVariantGenerated } from "./shape-variant-artifacts";
+import { materializeShapeVariant } from "./shape-variant-materialize";
+import {
+  getShapeVariantRecord,
+  loadShapeVariantCampaign,
+  mutateShapeVariantCampaign,
+  shapeVariantRecordId,
+  summarizeShapeVariantCampaign,
+  updateShapeVariantRecord
+} from "./shape-variant-store";
 
 const tinyPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -90,6 +117,7 @@ interface QueuedGeneration {
     path: string;
     mimeType: string;
   } | null;
+  shapeVariant: ShapeVariantDerivation | null;
 }
 
 function makeRunId() {
@@ -163,10 +191,12 @@ function constructionSnapshotForId(id: string | null | undefined): GenerationCon
 
 async function prepareGeneration({
   productId,
+  productShape,
   shot,
   prompt
 }: {
   productId: string;
+  productShape: ProductSummary["shape"];
   shot: Shot;
   prompt: string;
 }) {
@@ -189,7 +219,18 @@ async function prepareGeneration({
   }
 
   return {
-    prompt: composeGenerationPrompt({ prompt, background, labelLogo, construction }),
+    prompt: composeGenerationPrompt({
+      prompt,
+      background,
+      labelLogo,
+      construction,
+      shapeContext: resolveShapeShotContext({
+        shape: productShape,
+        shot,
+        prompt,
+        backgroundType: background?.type
+      })
+    }),
     background,
     labelLogo,
     construction
@@ -203,7 +244,7 @@ async function listProductGenerated(productId: string, includeRefineArtifacts = 
     runtimeAggregates: runtimeAggregatesFor(productId)
   });
 
-  return includeRefineArtifacts ? generated : hideRefineGenerated(generated);
+  return includeRefineArtifacts ? generated : hideShapeVariantGenerated(hideRefineGenerated(generated));
 }
 
 async function loadNormalizedProductState(productId: string) {
@@ -318,6 +359,176 @@ async function assertReadyProduct(productId: string) {
     throw validationError("PRODUCT_NOT_GENERATABLE", product.errors[0] ?? "Product is not ready for generation.");
   }
   return product;
+}
+
+function shapeShot(record: ShapeVariantRecord): Shot {
+  return {
+    id: shotIdForShape(record.shape),
+    name: shotNameForShape(record.shape),
+    prompt: record.prompt,
+    defaultAspectRatio: "1:1",
+    defaultImageSize: record.imageSize
+  };
+}
+
+function shapeDerivation(record: ShapeVariantRecord, runId: string): ShapeVariantDerivation {
+  return {
+    familyId: record.familyId,
+    sourceProductId: record.sourceProductId,
+    variantProductId: record.variantProductId,
+    shape: record.shape,
+    strategy: record.strategy,
+    runnerRatio: record.runnerRatio,
+    roundEdgePolicy: record.roundEdgePolicy,
+    promptVersion: record.promptVersion,
+    runId
+  };
+}
+
+async function shapeVariantCandidates(record: ShapeVariantRecord) {
+  const generated = await listGeneratedAssets({
+    productRoot: config.productRoot,
+    productId: record.sourceProductId
+  });
+  const wanted = new Set(record.candidateAssetIds);
+  return [...generated.active, ...generated.trash].filter((asset) => wanted.has(asset.assetId));
+}
+
+async function enqueueShapeVariantRecord(record: ShapeVariantRecord) {
+  const source = await assertReadyProduct(record.sourceProductId);
+  if (source.shape !== "area" || !source.baseImage) {
+    throw validationError("AREA_SOURCE_REQUIRED", "Runner and Round variants must be generated from a ready Area rug.");
+  }
+  const sourceHash = await sha256File(path.join(config.productRoot, source.id, source.baseImage));
+  if (sourceHash !== record.sourceBaseSha256) {
+    await updateShapeVariantRecord(config.productRoot, record.id, (current) => {
+      current.status = "stale";
+      current.lastError = "The source base rug changed after this variant was prepared.";
+    });
+    throw conflictError("SHAPE_VARIANT_SOURCE_CHANGED", "The source rug changed. Re-prepare this variant before generating.");
+  }
+  if (record.status === "approved") {
+    throw conflictError("SHAPE_VARIANT_APPROVED", "This shape variant is already approved.");
+  }
+  if (record.status === "queued" || record.status === "generating") {
+    throw conflictError("SHAPE_VARIANT_RUNNING", "This shape variant is already queued or generating.");
+  }
+  if (await pathExists(path.join(config.productRoot, record.variantProductId))) {
+    throw conflictError("VARIANT_PRODUCT_EXISTS", `Product folder ${record.variantProductId} already exists.`);
+  }
+
+  const shot = shapeShot(record);
+  const generated = await listGeneratedAssets({ productRoot: config.productRoot, productId: record.sourceProductId });
+  const runId = makeRunId();
+  await updateShapeVariantRecord(config.productRoot, record.id, (current) => {
+    current.status = "queued";
+    current.activeRunId = runId;
+    current.requestedCandidateCount = current.candidateCount;
+    current.completedCandidateCount = 0;
+    current.lastError = null;
+  });
+
+  try {
+    const jobIds = enqueueBatch({
+      runId,
+      productId: record.sourceProductId,
+      shot,
+      prompt: record.prompt,
+      settings: { aspectRatio: "1:1", imageSize: record.imageSize },
+      referenceImages: [],
+      background: null,
+      labelLogo: null,
+      construction: null,
+      parentAssetId: null,
+      batchSize: record.candidateCount,
+      attemptStart: nextAttemptForShot(generated, shot.id),
+      shapeVariant: shapeDerivation(record, runId)
+    });
+    return { id: record.id, runId, jobIds };
+  } catch (error) {
+    await updateShapeVariantRecord(config.productRoot, record.id, (current) => {
+      if (current.activeRunId === runId) {
+        current.status = "failed";
+        current.activeRunId = null;
+        current.lastError = error instanceof Error ? error.message : "Could not queue shape generation.";
+      }
+    });
+    throw error;
+  }
+}
+
+async function resumeInterruptedShapeVariants() {
+  const campaign = await loadShapeVariantCampaign(config.productRoot);
+  const interrupted = campaign.variants.filter(
+    (record) => (record.status === "queued" || record.status === "generating") && record.activeRunId
+  );
+
+  for (const original of interrupted) {
+    try {
+      const allAssets = await listGeneratedAssets({
+        productRoot: config.productRoot,
+        productId: original.sourceProductId
+      });
+      const runAssets = [...allAssets.active, ...allAssets.trash].filter(
+        (asset) =>
+          asset.inputs.shapeVariant?.runId === original.activeRunId &&
+          asset.inputs.shapeVariant?.variantProductId === original.variantProductId
+      );
+      const successfulIds = runAssets
+        .filter((asset) => asset.status !== "failed" && Boolean(asset.output?.file))
+        .map((asset) => asset.assetId);
+      const completed = Math.min(original.requestedCandidateCount, runAssets.length);
+      const reconciled = await updateShapeVariantRecord(config.productRoot, original.id, (record) => {
+        for (const assetId of successfulIds) {
+          if (!record.candidateAssetIds.includes(assetId)) record.candidateAssetIds.push(assetId);
+        }
+        record.completedCandidateCount = completed;
+        if (completed >= record.requestedCandidateCount) {
+          record.status = record.candidateAssetIds.length > 0 ? "needs_review" : "failed";
+          record.activeRunId = null;
+          if (record.status === "failed") record.lastError = "The interrupted run completed without a usable candidate.";
+        }
+      });
+      if (!reconciled.activeRunId) continue;
+
+      const remaining = reconciled.requestedCandidateCount - reconciled.completedCandidateCount;
+      if (remaining <= 0) continue;
+      const source = await assertReadyProduct(reconciled.sourceProductId);
+      if (source.shape !== "area" || !source.baseImage) throw validationError("AREA_SOURCE_REQUIRED", "Shape source is not ready.");
+      const currentHash = await sha256File(path.join(config.productRoot, source.id, source.baseImage));
+      if (currentHash !== reconciled.sourceBaseSha256) {
+        await updateShapeVariantRecord(config.productRoot, reconciled.id, (record) => {
+          record.status = "stale";
+          record.activeRunId = null;
+          record.lastError = "The source changed while the app was offline.";
+        });
+        continue;
+      }
+
+      const shot = shapeShot(reconciled);
+      enqueueBatch({
+        runId: reconciled.activeRunId,
+        productId: reconciled.sourceProductId,
+        shot,
+        prompt: reconciled.prompt,
+        settings: { aspectRatio: "1:1", imageSize: reconciled.imageSize },
+        referenceImages: [],
+        background: null,
+        labelLogo: null,
+        construction: null,
+        parentAssetId: null,
+        batchSize: remaining,
+        attemptStart: nextAttemptForShot(allAssets, shot.id),
+        shapeVariant: shapeDerivation(reconciled, reconciled.activeRunId)
+      });
+    } catch (error) {
+      await updateShapeVariantRecord(config.productRoot, original.id, (record) => {
+        record.status = "failed";
+        record.activeRunId = null;
+        record.lastError = error instanceof Error ? `Could not resume interrupted generation: ${error.message}` : "Could not resume interrupted generation.";
+      }).catch(() => undefined);
+    }
+  }
 }
 
 function sanitizeProductSlug(name: string) {
@@ -445,6 +656,7 @@ function enqueueBatch(input: {
   batchSize: number;
   attemptStart: number;
   sourceImage?: QueuedGeneration["sourceImage"];
+  shapeVariant?: ShapeVariantDerivation | null;
 }) {
   if (jobs.hasRunning(input.productId, input.shot.id)) {
     throw conflictError("JOB_ALREADY_RUNNING", `A job is already queued or generating for ${input.shot.name}.`);
@@ -468,6 +680,7 @@ function enqueueBatch(input: {
         batchIndex: index + 1,
         batchTotal: input.batchSize,
         sourceImage: input.sourceImage ?? null,
+        shapeVariant: input.shapeVariant ?? null,
         skipRunningCheck: true
       })
     );
@@ -482,7 +695,10 @@ async function drainQueue() {
     const next = pending.shift();
     if (!next) return;
     const current = jobs.all().find((job) => job.jobId === next.job.jobId);
-    if (current?.status === "cancelled") continue;
+    if (current?.status === "cancelled") {
+      await noteShapeVariantCompletion(next, "cancelled");
+      continue;
+    }
     activeCount += 1;
     void runGeneration(next).finally(() => {
       activeCount -= 1;
@@ -493,6 +709,7 @@ async function drainQueue() {
 
 async function runGeneration(item: QueuedGeneration) {
   jobs.update(item.job.jobId, { status: "generating", message: batchLabel("Generating", item) });
+  await noteShapeVariantStarted(item);
   if (item.background) {
     await markBackgroundUsed({ productRoot: config.productRoot, backgroundId: item.background.id });
   }
@@ -552,6 +769,7 @@ async function runGeneration(item: QueuedGeneration) {
     });
     if (abortController.signal.aborted || jobs.get(item.job.jobId)?.status === "cancelled") {
       jobs.update(item.job.jobId, { status: "cancelled", message: "Cancelled." });
+      await noteShapeVariantCompletion(item, "cancelled");
       return;
     }
     if (!assetId || !baseInfo) {
@@ -583,6 +801,7 @@ async function runGeneration(item: QueuedGeneration) {
       background: item.background,
       labelLogo: item.labelLogo,
       construction: item.construction,
+      shapeVariant: item.shapeVariant,
       durationMs: Date.now() - started
     });
     await saveAsset({ productRoot: config.productRoot, productId: item.productId, asset });
@@ -591,9 +810,11 @@ async function runGeneration(item: QueuedGeneration) {
       assetId,
       message: batchLabel("Generated", item)
     });
+    await noteShapeVariantCompletion(item, "succeeded", assetId);
   } catch (error) {
     if (isCancellation(error) || jobs.get(item.job.jobId)?.status === "cancelled") {
       jobs.update(item.job.jobId, { status: "cancelled", message: "Cancelled." });
+      await noteShapeVariantCompletion(item, "cancelled");
       return;
     }
     if (!baseInfo || !assetId) {
@@ -601,6 +822,7 @@ async function runGeneration(item: QueuedGeneration) {
         status: "failed",
         message: error instanceof Error ? error.message : "Generation failed."
       });
+      await noteShapeVariantCompletion(item, "failed", null, error);
       return;
     }
     const asset = createAssetRecord({
@@ -617,6 +839,7 @@ async function runGeneration(item: QueuedGeneration) {
       background: item.background,
       labelLogo: item.labelLogo,
       construction: item.construction,
+      shapeVariant: item.shapeVariant,
       durationMs: Date.now() - started,
       error
     });
@@ -626,9 +849,47 @@ async function runGeneration(item: QueuedGeneration) {
       assetId,
       message: asset.error?.message ?? "Failed"
     });
+    await noteShapeVariantCompletion(item, "failed", assetId, error);
   } finally {
     activeAbortControllers.delete(item.job.jobId);
   }
+}
+
+async function noteShapeVariantStarted(item: QueuedGeneration) {
+  if (!item.shapeVariant) return;
+  await updateShapeVariantRecord(config.productRoot, shapeVariantRecordId(item.shapeVariant.sourceProductId, item.shapeVariant.shape), (record) => {
+    if (record.activeRunId === item.shapeVariant?.runId && record.status !== "approved") {
+      record.status = "generating";
+    }
+  });
+}
+
+async function noteShapeVariantCompletion(
+  item: QueuedGeneration,
+  outcome: "succeeded" | "failed" | "cancelled",
+  assetId?: string | null,
+  error?: unknown
+) {
+  if (!item.shapeVariant) return;
+  await updateShapeVariantRecord(config.productRoot, shapeVariantRecordId(item.shapeVariant.sourceProductId, item.shapeVariant.shape), (record) => {
+    if (record.activeRunId !== item.shapeVariant?.runId || record.status === "approved") return;
+    if (outcome === "succeeded" && assetId && !record.candidateAssetIds.includes(assetId)) {
+      record.candidateAssetIds.push(assetId);
+    }
+    record.completedCandidateCount = Math.min(
+      record.requestedCandidateCount,
+      record.completedCandidateCount + 1
+    );
+    if (outcome !== "succeeded") {
+      record.lastError = error instanceof Error ? error.message : outcome === "cancelled" ? "Generation was cancelled." : "Generation failed.";
+    }
+    if (record.completedCandidateCount >= record.requestedCandidateCount) {
+      record.status = record.candidateAssetIds.length > 0 ? "needs_review" : outcome === "cancelled" ? "cancelled" : "failed";
+      record.activeRunId = null;
+    } else {
+      record.status = "generating";
+    }
+  });
 }
 
 function isCancellation(error: unknown) {
@@ -652,6 +913,7 @@ function createAssetRecord({
   background,
   labelLogo,
   construction,
+  shapeVariant,
   durationMs,
   error
 }: {
@@ -668,6 +930,7 @@ function createAssetRecord({
   background: GenerationBackgroundSnapshot | null;
   labelLogo: GenerationLabelLogoSnapshot | null;
   construction: GenerationConstructionSnapshot | null;
+  shapeVariant: ShapeVariantDerivation | null;
   durationMs: number;
   error?: unknown;
 }): AssetRecord {
@@ -695,7 +958,8 @@ function createAssetRecord({
       references: referenceImages,
       background,
       labelLogo,
-      construction
+      construction,
+      shapeVariant
     },
     output,
     provider: {
@@ -871,6 +1135,237 @@ app.get(
   "/api/products",
   asyncRoute(async (_req, res) => {
     res.json({ products: await productsWithCounts() });
+  })
+);
+
+app.get(
+  "/api/shape-variants",
+  asyncRoute(async (_req, res) => {
+    const campaign = await loadShapeVariantCampaign(config.productRoot);
+    const summary = summarizeShapeVariantCampaign(campaign);
+    res.json({
+      shapeVariants: {
+        ...summary,
+        plannedProviderCalls: summary.records
+          .filter((record) => ["planned", "failed", "cancelled", "stale"].includes(record.status))
+          .reduce((total, record) => total + record.candidateCount, 0)
+      }
+    });
+  })
+);
+
+app.post(
+  "/api/shape-variants/prepare",
+  asyncRoute(async (req, res) => {
+    const parsed = ShapeVariantPrepareRequestSchema.parse(req.body ?? {});
+    const products = await productsWithCounts();
+    const byId = new Map(products.map((product) => [product.id, product]));
+    const preparedInputs: Array<{
+      source: ProductSummary;
+      shape: "runner" | "round";
+      sourceBaseSha256: string;
+      prompt: string;
+    }> = [];
+
+    for (const sourceProductId of [...new Set(parsed.sourceProductIds)]) {
+      const source = byId.get(sourceProductId);
+      if (!source) throw notFoundError("UNKNOWN_PRODUCT", `Unknown product: ${sourceProductId}`);
+      if (source.shape !== "area" || source.status !== "ready" || !source.baseImage) {
+        throw validationError("AREA_SOURCE_REQUIRED", `${source.name} is not a ready Area rug.`);
+      }
+      const sourceBaseSha256 = await sha256File(path.join(config.productRoot, source.id, source.baseImage));
+      for (const shape of [...new Set(parsed.shapes)]) {
+        const variantProductId = `${source.id}--${shape}`;
+        const target = byId.get(variantProductId);
+        if (target && target.shape !== shape) {
+          throw conflictError("VARIANT_PRODUCT_EXISTS", `Product folder ${variantProductId} already exists and is not a valid ${shape} variant.`);
+        }
+        if (target) {
+          // The catalog is authoritative. A valid materialized sibling stays complete even if
+          // the disposable campaign file was removed or restored from an older backup.
+          continue;
+        }
+        preparedInputs.push({
+          source,
+          shape,
+          sourceBaseSha256,
+          prompt: buildShapeVariantPrompt({
+            shape,
+            strategy: parsed.strategy,
+            runnerRatio: parsed.runnerRatio,
+            roundEdgePolicy: parsed.roundEdgePolicy
+          })
+        });
+      }
+    }
+
+    const records = await mutateShapeVariantCampaign(config.productRoot, (campaign) => {
+      const now = new Date().toISOString();
+      const result: ShapeVariantRecord[] = [];
+      for (const input of preparedInputs) {
+        const id = shapeVariantRecordId(input.source.id, input.shape);
+        const existing = campaign.variants.find((record) => record.id === id);
+        if (existing?.status === "approved" || existing?.status === "queued" || existing?.status === "generating") {
+          result.push(structuredClone(existing));
+          continue;
+        }
+        const record: ShapeVariantRecord = {
+          id,
+          familyId: input.source.familyId,
+          sourceProductId: input.source.id,
+          variantProductId: `${input.source.id}--${input.shape}`,
+          shape: input.shape,
+          status: "planned",
+          strategy: parsed.strategy,
+          runnerRatio: input.shape === "runner" ? parsed.runnerRatio : null,
+          roundEdgePolicy: input.shape === "round" ? parsed.roundEdgePolicy : null,
+          imageSize: parsed.imageSize,
+          candidateCount: parsed.candidateCount,
+          sourceBaseFile: input.source.baseImage as string,
+          sourceBaseSha256: input.sourceBaseSha256,
+          promptVersion: promptVersionForShape(input.shape),
+          prompt: input.prompt,
+          candidateAssetIds: [],
+          approvedAssetId: null,
+          activeRunId: null,
+          requestedCandidateCount: 0,
+          completedCandidateCount: 0,
+          lastError: null,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now
+        };
+        if (existing) Object.assign(existing, record);
+        else campaign.variants.push(record);
+        result.push(structuredClone(record));
+      }
+      return result;
+    });
+
+    res.json({ records, plannedProviderCalls: records.filter((record) => record.status === "planned").reduce((sum, record) => sum + record.candidateCount, 0) });
+  })
+);
+
+app.post(
+  "/api/shape-variants/generate",
+  asyncRoute(async (req, res) => {
+    const parsed = ShapeVariantGenerateRequestSchema.parse(req.body ?? {});
+    const results: Array<{ id: string; runId?: string; jobIds?: string[]; error?: string }> = [];
+    for (const id of [...new Set(parsed.ids)]) {
+      try {
+        results.push(await enqueueShapeVariantRecord(await getShapeVariantRecord(config.productRoot, id)));
+      } catch (error) {
+        results.push({ id, error: error instanceof Error ? error.message : "Could not generate shape variant." });
+      }
+    }
+    res.json({ results });
+  })
+);
+
+app.post(
+  "/api/shape-variants/generate-shots",
+  asyncRoute(async (req, res) => {
+    const parsed = ShapeVariantShotsBatchRequestSchema.parse(req.body ?? {});
+    const masterShots = await loadMasterShots({ productRoot: config.productRoot });
+    const results: Array<{
+      productId: string;
+      jobIds: string[];
+      blocked: Array<{ shotId: string; message: string }>;
+    }> = [];
+
+    for (const productId of [...new Set(parsed.productIds)]) {
+      const product = await assertReadyProduct(productId);
+      if (product.shape === "area") {
+        results.push({ productId, jobIds: [], blocked: [{ shotId: "all", message: "This endpoint only generates approved Runner or Round product shots." }] });
+        continue;
+      }
+      const generated = await listProductGenerated(productId);
+      const missing = selectGenerateMissingShots({ shots: masterShots.shots, aggregates: generated.aggregates });
+      const runId = makeRunId();
+      const jobIds: string[] = [];
+      const blocked: Array<{ shotId: string; message: string }> = [];
+      for (const shot of missing) {
+        try {
+          const prepared = await prepareGeneration({ productId, productShape: product.shape, shot, prompt: shot.prompt });
+          jobIds.push(...enqueueBatch({
+            runId,
+            productId,
+            shot,
+            prompt: prepared.prompt,
+            settings: { aspectRatio: shot.defaultAspectRatio, imageSize: parsed.imageSize },
+            referenceImages: [],
+            background: prepared.background,
+            labelLogo: prepared.labelLogo,
+            construction: prepared.construction,
+            parentAssetId: null,
+            batchSize: 1,
+            attemptStart: nextAttemptForShot(generated, shot.id)
+          }));
+        } catch (error) {
+          blocked.push({ shotId: shot.id, message: error instanceof Error ? error.message : "Shot could not be queued." });
+        }
+      }
+      results.push({ productId, jobIds, blocked });
+    }
+
+    res.json({
+      results,
+      providerCallsQueued: results.reduce((total, result) => total + result.jobIds.length, 0)
+    });
+  })
+);
+
+app.get(
+  "/api/shape-variants/:id",
+  asyncRoute(async (req, res) => {
+    const record = await getShapeVariantRecord(config.productRoot, req.params.id as string);
+    res.json({ variant: record, candidates: await shapeVariantCandidates(record) });
+  })
+);
+
+app.post(
+  "/api/shape-variants/:id/approve",
+  asyncRoute(async (req, res) => {
+    const parsed = ShapeVariantApproveRequestSchema.parse(req.body ?? {});
+    const record = await getShapeVariantRecord(config.productRoot, req.params.id as string);
+    if (!record.candidateAssetIds.includes(parsed.assetId)) {
+      throw validationError("INVALID_SHAPE_CANDIDATE", "Choose a candidate produced for this shape variant.");
+    }
+    const variant = await materializeShapeVariant({
+      productRoot: config.productRoot,
+      record,
+      assetId: parsed.assetId
+    });
+    const products = await productsWithCounts();
+    res.json({
+      variant,
+      product: products.find((product) => product.id === record.variantProductId) ?? null
+    });
+  })
+);
+
+app.post(
+  "/api/shape-variants/:id/candidates/:assetId/reject",
+  asyncRoute(async (req, res) => {
+    const id = req.params.id as string;
+    const assetId = req.params.assetId as string;
+    const record = await getShapeVariantRecord(config.productRoot, id);
+    if (record.status === "approved") throw conflictError("SHAPE_VARIANT_APPROVED", "Approved variants cannot be rejected here.");
+    if (!record.candidateAssetIds.includes(assetId)) {
+      throw notFoundError("SHAPE_CANDIDATE_NOT_FOUND", "Shape candidate not found.");
+    }
+    const asset = await getAssetRecord({ productRoot: config.productRoot, productId: record.sourceProductId, assetId });
+    if (asset.asset.inputs.shapeVariant?.variantProductId !== record.variantProductId) {
+      throw validationError("CANDIDATE_PROVENANCE_MISMATCH", "Candidate provenance does not match this shape variant.");
+    }
+    await rejectAsset({ productRoot: config.productRoot, productId: record.sourceProductId, assetId });
+    const variant = await updateShapeVariantRecord(config.productRoot, id, (current) => {
+      current.candidateAssetIds = current.candidateAssetIds.filter((candidateId) => candidateId !== assetId);
+      if (current.candidateAssetIds.length === 0) {
+        current.status = "failed";
+        current.lastError = "All generated candidates were rejected.";
+      }
+    });
+    res.json({ variant });
   })
 );
 
@@ -1221,7 +1716,7 @@ app.post(
 
     const referenceImages = validateReferenceImages(product, parsed.referenceImages);
     const generated = await listProductGenerated(productId);
-    const prepared = await prepareGeneration({ productId, shot, prompt: parsed.prompt });
+    const prepared = await prepareGeneration({ productId, productShape: product.shape, shot, prompt: parsed.prompt });
     const runId = makeRunId();
     const jobIds = enqueueBatch({
       runId,
@@ -1256,7 +1751,7 @@ app.post(
     const preparedShots = await Promise.all(
       selected.map(async (shot) => ({
         shot,
-        prepared: await prepareGeneration({ productId, shot, prompt: shot.prompt })
+        prepared: await prepareGeneration({ productId, productShape: product.shape, shot, prompt: shot.prompt })
       }))
     );
     const jobIds = preparedShots.flatMap(({ shot, prepared }) =>
@@ -1440,6 +1935,7 @@ await loadRefineSettings({ productRoot: config.productRoot });
 const persistedJobs = await loadPersistedJobs(config.productRoot);
 jobs.restore(persistedJobs);
 await savePersistedJobs(config.productRoot, jobs.all());
+await resumeInterruptedShapeVariants();
 
 app.listen(config.port, "127.0.0.1", () => {
   console.log(`Product Shot Queue API listening on http://127.0.0.1:${config.port}`);

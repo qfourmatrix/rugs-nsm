@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { compareProductsByCreatedAt, ensureProductRoot, resolveProductImagePath, scanProducts } from "../server/scanner";
@@ -40,6 +40,9 @@ describe("product scanner and root bootstrap", () => {
     const summary = (id: string, createdAt: string): ProductSummary => ({
       id,
       name: id,
+      shape: "area",
+      familyId: id,
+      sourceProductId: id,
       createdAt,
       status: "ready",
       baseImage: "base.jpg",
@@ -91,6 +94,43 @@ describe("product scanner and root bootstrap", () => {
     expect(duplicate.status).toBe("duplicate_base");
     expect(duplicate.baseImage).toBeNull();
     expect(duplicate.errors.join(" ")).toMatch(/multiple|duplicate/i);
+  });
+
+  it("groups approved shape siblings from validated variant metadata", async () => {
+    await makeProduct(productRoot, "solaris", ["base.jpg"]);
+    const runnerDir = await makeProduct(productRoot, "solaris--runner", ["base.png"]);
+    await writeFile(path.join(runnerDir, "variant.json"), JSON.stringify({
+      version: 1,
+      familyId: "solaris",
+      sourceProductId: "solaris",
+      shape: "runner",
+      sourceBaseSha256: "a".repeat(64),
+      approvedAssetId: "shape_runner_base_approved",
+      promptVersion: "runner-v1",
+      createdAt: "2026-08-05T00:00:00.000Z"
+    }));
+
+    const products = productList(await scanProducts({ productRoot }));
+    expect(findProduct(products, "solaris")).toMatchObject({ shape: "area", familyId: "solaris", sourceProductId: "solaris" });
+    expect(findProduct(products, "solaris--runner")).toMatchObject({ shape: "runner", familyId: "solaris", sourceProductId: "solaris", status: "ready" });
+  });
+
+  it("quarantines a shape folder whose provenance does not match its folder name", async () => {
+    const runnerDir = await makeProduct(productRoot, "wrong-runner-name", ["base.png"]);
+    await writeFile(path.join(runnerDir, "variant.json"), JSON.stringify({
+      version: 1,
+      familyId: "solaris",
+      sourceProductId: "solaris",
+      shape: "runner",
+      sourceBaseSha256: "a".repeat(64),
+      approvedAssetId: "candidate",
+      promptVersion: "runner-v1",
+      createdAt: "2026-08-05T00:00:00.000Z"
+    }));
+
+    const product = findProduct(productList(await scanProducts({ productRoot })), "wrong-runner-name");
+    expect(product.status).toBe("invalid_variant");
+    expect(product.baseImage).toBeNull();
   });
 
   it("detects supported direct reference images from the references folder", async () => {

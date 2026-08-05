@@ -3,6 +3,7 @@ import type {
   GenerationConstructionSnapshot,
   GenerationLabelLogoSnapshot
 } from "../shared/types";
+import type { ShapeShotContext } from "../shared/shape-shot-prompts";
 import {
   FORBIDDEN_RUG_CHANGES,
   PROMPT_PRIORITY_NOTE,
@@ -159,14 +160,26 @@ export function composeGenerationPrompt({
   prompt,
   background,
   labelLogo,
-  construction
+  construction,
+  shapeContext = null
 }: {
   prompt: string;
   background: GenerationBackgroundSnapshot | null;
   labelLogo: GenerationLabelLogoSnapshot | null;
   construction: GenerationConstructionSnapshot | null;
+  shapeContext?: ShapeShotContext | null;
 }) {
   const composed = normalizeJsonPrompt(prompt, construction);
+
+  if (shapeContext) {
+    if (shapeContext.override) Object.assign(composed, shapeContext.override);
+    composed.shape_context = {
+      product_shape: shapeContext.shape,
+      identity_lock: shapeContext.identityInstruction,
+      background_compatibility: shapeContext.backgroundCompatibility,
+      priority: "This shape identity lock is mandatory and overrides scene or background suggestions that imply a different rug shape."
+    };
+  }
 
   if (background) {
     const sanitizedBackground = sanitizeBackgroundPrompt(background.prompt);

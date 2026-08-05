@@ -11,8 +11,25 @@ import type {
   SosCustomPalette,
   SosPaletteId,
   ProductState,
-  ProductSummary
+  ProductSummary,
+  AssetRecord,
+  RoundEdgePolicy,
+  ShapeVariantRecord,
+  ShapeVariantShape,
+  ShapeVariantStatus,
+  ShapeVariantStrategy
 } from "../shared/types";
+
+export interface ShapeVariantsOverview {
+  records: ShapeVariantRecord[];
+  counts: Record<ShapeVariantStatus, number>;
+  plannedProviderCalls: number;
+}
+
+export interface ShapeVariantDetail {
+  variant: ShapeVariantRecord;
+  candidates: AssetRecord[];
+}
 
 export interface GenerateResponse {
   runId: string;
@@ -352,5 +369,60 @@ export async function rejectAsset(productId: string, assetId: string) {
 export async function cancelJob(jobId: string) {
   return request(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
     method: "POST"
+  });
+}
+
+export async function getShapeVariants(): Promise<ShapeVariantsOverview> {
+  const data = await request<unknown>("/api/shape-variants");
+  return unwrap<ShapeVariantsOverview>(data, ["shapeVariants"]);
+}
+
+export async function prepareShapeVariants(payload: {
+  sourceProductIds: string[];
+  shapes: ShapeVariantShape[];
+  strategy: ShapeVariantStrategy;
+  runnerRatio: number;
+  roundEdgePolicy: RoundEdgePolicy;
+  imageSize: "2K" | "4K";
+  candidateCount: 1 | 2;
+}): Promise<{ records: ShapeVariantRecord[]; plannedProviderCalls: number }> {
+  return request("/api/shape-variants/prepare", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function generateShapeVariants(ids: string[]) {
+  return request<{ results: Array<{ id: string; runId?: string; jobIds?: string[]; error?: string }> }>(
+    "/api/shape-variants/generate",
+    { method: "POST", body: JSON.stringify({ ids }) }
+  );
+}
+
+export async function getShapeVariant(id: string): Promise<ShapeVariantDetail> {
+  return request(`/api/shape-variants/${encodeURIComponent(id)}`);
+}
+
+export async function approveShapeVariant(id: string, assetId: string) {
+  return request<{ variant: ShapeVariantRecord; product: ProductSummary | null }>(
+    `/api/shape-variants/${encodeURIComponent(id)}/approve`,
+    { method: "POST", body: JSON.stringify({ assetId }) }
+  );
+}
+
+export async function rejectShapeVariantCandidate(id: string, assetId: string) {
+  return request<{ variant: ShapeVariantRecord }>(
+    `/api/shape-variants/${encodeURIComponent(id)}/candidates/${encodeURIComponent(assetId)}/reject`,
+    { method: "POST" }
+  );
+}
+
+export async function generateShapeVariantShots(productIds: string[], imageSize: "2K" | "4K") {
+  return request<{
+    results: Array<{ productId: string; jobIds: string[]; blocked: Array<{ shotId: string; message: string }> }>;
+    providerCallsQueued: number;
+  }>("/api/shape-variants/generate-shots", {
+    method: "POST",
+    body: JSON.stringify({ productIds, imageSize })
   });
 }

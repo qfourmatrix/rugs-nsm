@@ -59,6 +59,19 @@ async function findAssetMetadata(productRoot: string, productId: string, assetId
   throw notFoundError("ASSET_NOT_FOUND", "Asset metadata not found.");
 }
 
+export async function getAssetRecord({
+  productRoot,
+  productId,
+  assetId
+}: {
+  productRoot: string;
+  productId: string;
+  assetId: string;
+}) {
+  const found = await findAssetMetadata(productRoot, productId, assetId);
+  return { ...found, asset: await readAssetAt(found.path) };
+}
+
 async function listMetadataFiles(dir: string) {
   await ensureDir(dir);
   const entries = await fs.readdir(dir, { withFileTypes: true });

@@ -67,21 +67,40 @@ export function ProductTabs({
   const overflowRef = useRef<HTMLDetailsElement>(null);
   const productTabsRef = useRef<HTMLElement>(null);
 
-  const selectedIndex = products.findIndex((product) => product.id === selectedProductId);
-  const selectedProduct = selectedIndex >= 0 ? products[selectedIndex] : null;
+  const productsByFamily = useMemo(() => {
+    const families = new Map<string, ProductSummary[]>();
+    for (const product of products) {
+      const family = families.get(product.familyId) ?? [];
+      family.push(product);
+      families.set(product.familyId, family);
+    }
+    return families;
+  }, [products]);
+  const familySources = useMemo(
+    () => [...productsByFamily.values()].map((family) => family.find((product) => product.shape === "area") ?? family[0]).filter((product): product is ProductSummary => Boolean(product)),
+    [productsByFamily]
+  );
+  const selectedProduct = products.find((product) => product.id === selectedProductId) ?? null;
+  const selectedFamilyIndex = familySources.findIndex((product) => product.familyId === selectedProduct?.familyId);
   const selectedStatus = selectedProduct ? productStatus(selectedProduct) : null;
-  const previousProduct = selectedIndex > 0 ? products[selectedIndex - 1] : null;
-  const nextProduct = selectedIndex >= 0 && selectedIndex < products.length - 1 ? products[selectedIndex + 1] : null;
+  const previousProduct = selectedFamilyIndex > 0 ? familySources[selectedFamilyIndex - 1] : null;
+  const nextProduct = selectedFamilyIndex >= 0 && selectedFamilyIndex < familySources.length - 1 ? familySources[selectedFamilyIndex + 1] : null;
   const runningCount = products.reduce((total, product) => total + product.counts.running, 0);
 
   const visibleProducts = useMemo(
     () =>
-      products.filter((product) => {
+      familySources.filter((product) => {
         const matchesSearch = !deferredSearch || product.name.toLowerCase().includes(deferredSearch);
-        return matchesSearch && matchesProductFilter(product, filter);
+        return matchesSearch && matchesFamilyFilter(productsByFamily.get(product.familyId) ?? [product], filter);
       }),
-    [deferredSearch, filter, products]
+    [deferredSearch, familySources, filter, productsByFamily]
   );
+
+  const selectFamily = (product: ProductSummary) => {
+    const desiredShape = selectedProduct?.shape ?? "area";
+    const family = productsByFamily.get(product.familyId) ?? [product];
+    onSelectProduct(family.find((candidate) => candidate.shape === desiredShape)?.id ?? product.id);
+  };
 
   useEffect(() => {
     if (!browserOpen) {
@@ -177,7 +196,7 @@ export function ProductTabs({
             <button
               className="topbarIconButton"
               type="button"
-              onClick={() => previousProduct && onSelectProduct(previousProduct.id)}
+              onClick={() => previousProduct && selectFamily(previousProduct)}
               disabled={!previousProduct || loading}
               aria-label={previousProduct ? `Previous product: ${previousProduct.name}` : "No previous product"}
               title={previousProduct?.name ?? "No previous product"}
@@ -187,7 +206,7 @@ export function ProductTabs({
             <button
               className="topbarIconButton"
               type="button"
-              onClick={() => nextProduct && onSelectProduct(nextProduct.id)}
+              onClick={() => nextProduct && selectFamily(nextProduct)}
               disabled={!nextProduct || loading}
               aria-label={nextProduct ? `Next product: ${nextProduct.name}` : "No next product"}
               title={nextProduct?.name ?? "No next product"}
@@ -201,11 +220,11 @@ export function ProductTabs({
             className="browseProductsButton"
             type="button"
             onClick={() => setBrowserOpen(true)}
-            aria-label={`Browse products, ${products.length} total`}
+            aria-label={`Browse product families, ${familySources.length} total`}
           >
             <LayoutGrid size={16} aria-hidden="true" />
-            <span>Browse products</span>
-            <span className="browseProductCount">{products.length}</span>
+            <span>Browse families</span>
+            <span className="browseProductCount">{familySources.length}</span>
           </button>
         </div>
 
@@ -233,9 +252,10 @@ export function ProductTabs({
         </div>
 
         <nav className="productTabsRail" ref={productTabsRef} aria-label="Product tabs">
-          {products.map((product) => {
-            const selected = product.id === selectedProductId;
-            const status = productStatus(product);
+          {familySources.map((product) => {
+            const selected = product.familyId === selectedProduct?.familyId;
+            const family = productsByFamily.get(product.familyId) ?? [product];
+            const status = familyStatus(family);
 
             return (
               <button
@@ -243,7 +263,7 @@ export function ProductTabs({
                 type="button"
                 key={product.id}
                 data-selected={selected}
-                onClick={() => onSelectProduct(product.id)}
+                onClick={() => selectFamily(product)}
                 aria-current={selected ? "page" : undefined}
                 title={product.name}
               >
@@ -270,7 +290,7 @@ export function ProductTabs({
             <header className="productBrowserHeader">
               <div>
                 <h2 id="product-browser-title">Products</h2>
-                <p>{visibleProducts.length === products.length ? `${products.length} total` : `${visibleProducts.length} of ${products.length}`}</p>
+                <p>{visibleProducts.length === familySources.length ? `${familySources.length} families` : `${visibleProducts.length} of ${familySources.length} families`}</p>
               </div>
               <button className="productBrowserClose" type="button" onClick={closeBrowser} aria-label="Close product browser">
                 <X size={18} aria-hidden="true" />
@@ -316,7 +336,8 @@ export function ProductTabs({
                     <ProductCard
                       key={product.id}
                       product={product}
-                      selected={product.id === selectedProductId}
+                      family={productsByFamily.get(product.familyId) ?? [product]}
+                      selected={product.familyId === selectedProduct?.familyId}
                       onSelect={() => selectFromBrowser(product.id)}
                     />
                   ))}
@@ -347,14 +368,16 @@ export function ProductTabs({
 
 function ProductCard({
   product,
+  family,
   selected,
   onSelect
 }: {
   product: ProductSummary;
+  family: ProductSummary[];
   selected: boolean;
   onSelect: () => void;
 }) {
-  const status = productStatus(product);
+  const status = familyStatus(family);
 
   return (
     <button
@@ -366,6 +389,11 @@ function ProductCard({
       <ProductThumbnail product={product} className="productBrowserCardImage" />
       <span className="productBrowserCardBody">
         <span className="productBrowserCardTitle">{product.name}</span>
+        <span className="productShapeAvailability">
+          {(["area", "runner", "round"] as const).map((shape) => (
+            <span className={family.some((candidate) => candidate.shape === shape) ? "isReady" : ""} key={shape}>{shape}</span>
+          ))}
+        </span>
         <span className="productBrowserCardDate">Created {formatProductDate(product.createdAt)}</span>
         <span className="productBrowserCardMeta">
           <span>{product.counts.accepted} of {product.counts.totalShots} accepted</span>
@@ -410,6 +438,7 @@ export function productPreview(
 export function productStatus(product: ProductSummary): { label: string; tone: StatusTone } {
   if (product.status === "missing_base") return { label: "Missing base", tone: "warning" };
   if (product.status === "duplicate_base") return { label: "Duplicate base", tone: "danger" };
+  if (product.status === "invalid_variant") return { label: "Invalid variant", tone: "danger" };
   if (product.counts.running > 0) return { label: "Running", tone: "running" };
   if (product.counts.failed > 0) return { label: "Failed", tone: "danger" };
   if (product.counts.reviewNeeded > 0) return { label: "Needs review", tone: "review" };
@@ -424,6 +453,26 @@ export function matchesProductFilter(product: ProductSummary, filter: ProductFil
   const needsAttention =
     product.status !== "ready" || product.counts.failed > 0 || product.counts.reviewNeeded > 0;
   return filter === "needs_attention" ? needsAttention : !needsAttention && !isProductComplete(product);
+}
+
+function matchesFamilyFilter(family: ProductSummary[], filter: ProductFilter) {
+  if (filter === "all") return true;
+  const statuses = family.map(productStatus);
+  const complete = family.length > 0 && family.every(isProductComplete);
+  if (filter === "complete") return complete;
+  const needsAttention = family.some((product) => product.status !== "ready") || statuses.some((status) => ["danger", "review", "warning"].includes(status.tone));
+  return filter === "needs_attention" ? needsAttention : !needsAttention && !complete;
+}
+
+function familyStatus(family: ProductSummary[]): { label: string; tone: StatusTone } {
+  const statuses = family.map(productStatus);
+  for (const tone of ["running", "danger", "review", "warning"] as const) {
+    const match = statuses.find((status) => status.tone === tone);
+    if (match) return match;
+  }
+  const shapesReady = new Set(family.filter((product) => product.status === "ready").map((product) => product.shape)).size;
+  if (shapesReady === 3 && family.every(isProductComplete)) return { label: "Family complete", tone: "complete" };
+  return { label: `${shapesReady}/3 shapes`, tone: shapesReady === 3 ? "progress" : "review" };
 }
 
 function isProductComplete(product: ProductSummary) {

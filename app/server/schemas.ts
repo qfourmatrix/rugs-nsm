@@ -15,6 +15,9 @@ export const SosCustomPaletteSchema = z
 export const AssetStatusSchema = z.enum(["done", "accepted", "rejected", "failed"]);
 export const JobStatusSchema = z.enum(["queued", "generating", "succeeded", "failed", "cancelled"]);
 export const ProviderModeSchema = z.enum(["mock", "laozhang"]);
+export const ShapeVariantShapeSchema = z.enum(["runner", "round"]);
+export const ShapeVariantStrategySchema = z.enum(["auto", "repeat_border", "endcap", "stripe_band", "focal", "asymmetrical"]);
+export const RoundEdgePolicySchema = z.enum(["bound", "preserve_source", "radial_fringe"]);
 
 export const ShotSchema = z
   .object({
@@ -187,6 +190,21 @@ export const AssetRecordSchema = z
             id: RugConstructionIdSchema,
             name: z.string(),
             prompt: z.string()
+          })
+          .strict()
+          .nullable()
+          .optional(),
+        shapeVariant: z
+          .object({
+            familyId: z.string(),
+            sourceProductId: z.string(),
+            variantProductId: z.string(),
+            shape: ShapeVariantShapeSchema,
+            strategy: ShapeVariantStrategySchema,
+            runnerRatio: z.number().min(2).max(6).nullable(),
+            roundEdgePolicy: RoundEdgePolicySchema.nullable(),
+            promptVersion: z.string(),
+            runId: z.string()
           })
           .strict()
           .nullable()

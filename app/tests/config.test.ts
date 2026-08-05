@@ -29,4 +29,18 @@ describe("portable app configuration", () => {
 
     expect(config.productRoot).toBe("/Volumes/Rugs/products");
   });
+
+  it("supports explicit QA overrides without editing the recipient's private env file", () => {
+    const config = loadConfig({
+      PROVIDER_MODE: "laozhang",
+      LAOZHANG_API_KEY: "private-key",
+      APP_PORT: "8787",
+      APP_PRODUCT_ROOT: "/Volumes/Rugs/live",
+      RUGS_PROVIDER_MODE_OVERRIDE: "mock",
+      RUGS_PORT_OVERRIDE: "18878",
+      RUGS_PRODUCT_ROOT_OVERRIDE: "/tmp/rugs-qa"
+    });
+
+    expect(config).toMatchObject({ providerMode: "mock", port: 18878, productRoot: "/tmp/rugs-qa" });
+  });
 });

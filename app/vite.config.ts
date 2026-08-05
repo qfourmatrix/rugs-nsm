@@ -23,6 +23,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const shareUsername = env.SHARE_USERNAME;
   const sharePassword = env.SHARE_PASSWORD;
+  const apiProxyTarget = process.env.API_PROXY_TARGET ?? env.API_PROXY_TARGET ?? "http://127.0.0.1:8787";
 
   return {
     plugins: [
@@ -58,7 +59,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       allowedHosts: [".trycloudflare.com"],
       proxy: {
-        "/api": "http://127.0.0.1:8787"
+        "/api": apiProxyTarget
       }
     },
     preview: {
@@ -66,7 +67,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       allowedHosts: [".trycloudflare.com"],
       proxy: {
-        "/api": "http://127.0.0.1:8787"
+        "/api": apiProxyTarget
       }
     },
     test: {

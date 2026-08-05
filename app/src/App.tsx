@@ -41,6 +41,7 @@ import { LeftPanel } from "./components/LeftPanel";
 import { ProductTabs } from "./components/ProductTabs";
 import { RefineStep } from "./components/RefineStep";
 import { RightPanel } from "./components/RightPanel";
+import { ShapeVariantStudio } from "./components/ShapeVariantStudio";
 import type {
   GeneratedResponse,
   AppInfo,
@@ -1006,24 +1007,33 @@ export function App() {
 
   return (
     <div className="appShell">
-      <ProductTabs
-        products={products}
-        selectedProductId={selectedProductId}
-        search={search}
-        loading={isBusy}
-        onSearchChange={setSearch}
-        onSelectProduct={handleSelectProduct}
-        onRescan={handleRescan}
-        onCreateProduct={() => setCreateModalOpen(true)}
-      />
+      <div className="appHeaderStack">
+        <ProductTabs
+          products={products}
+          selectedProductId={selectedProductId}
+          search={search}
+          loading={isBusy}
+          onSearchChange={setSearch}
+          onSelectProduct={handleSelectProduct}
+          onRescan={handleRescan}
+          onCreateProduct={() => setCreateModalOpen(true)}
+        />
+        <ShapeVariantStudio
+          products={products}
+          selectedProduct={selectedProduct}
+          loading={isBusy}
+          onSelectProduct={handleSelectProduct}
+          onCatalogChanged={refreshCurrent}
+        />
 
-      {shellError || selectedError || actionError ? (
-        <div className="appAlert">
-          {shellError ? <span>Startup: {shellError}</span> : null}
-          {selectedError ? <span>Product: {selectedError}</span> : null}
-          {actionError ? <span>Action: {actionError}</span> : null}
-        </div>
-      ) : null}
+        {shellError || selectedError || actionError ? (
+          <div className="appAlert">
+            {shellError ? <span>Startup: {shellError}</span> : null}
+            {selectedError ? <span>Product: {selectedError}</span> : null}
+            {actionError ? <span>Action: {actionError}</span> : null}
+          </div>
+        ) : null}
+      </div>
 
       {selectedProduct?.status === "missing_base" ? (
         <RefineStep

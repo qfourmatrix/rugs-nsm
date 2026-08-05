@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BulkGenerateRequestSchema, GenerateRequestSchema, RefineRequestSchema } from "../shared/schemas";
+import {
+  BulkGenerateRequestSchema,
+  GenerateRequestSchema,
+  RefineRequestSchema,
+  ShapeVariantPrepareRequestSchema
+} from "../shared/schemas";
 import { DEFAULT_SOS_CUSTOM_PALETTE } from "../shared/sos-palettes";
 
 describe("generation request schemas", () => {
@@ -48,6 +53,20 @@ describe("generation request schemas", () => {
         batchSize: 99
       })
     ).toThrow();
+  });
+
+  it("defaults shape campaigns to one 4K candidate per Runner and Round", () => {
+    expect(ShapeVariantPrepareRequestSchema.parse({ sourceProductIds: ["rug-1"] })).toMatchObject({
+      sourceProductIds: ["rug-1"],
+      shapes: ["runner", "round"],
+      strategy: "auto",
+      runnerRatio: 3.33,
+      roundEdgePolicy: "preserve_source",
+      imageSize: "4K",
+      candidateCount: 1
+    });
+    expect(() => ShapeVariantPrepareRequestSchema.parse({ sourceProductIds: ["rug-1"], runnerRatio: 20 })).toThrow();
+    expect(() => ShapeVariantPrepareRequestSchema.parse({ sourceProductIds: ["rug-1"], candidateCount: 3 })).toThrow();
   });
 
   it("accepts supported refine modes and defaults older requests", () => {

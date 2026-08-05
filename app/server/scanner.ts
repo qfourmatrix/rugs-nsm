@@ -1,7 +1,8 @@
-import { lstat, readdir, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { SUPPORTED_EXTENSIONS } from "../shared/constants";
-import type { ProductSummary } from "../shared/types";
+import { ShapeVariantMetadataSchema } from "../shared/schemas";
+import type { ProductSummary, ShapeVariantMetadata } from "../shared/types";
 import { notFoundError, validationError } from "./errors";
 import { assertSafeBasename, ensureDir, pathExists } from "./fsUtils";
 import { withoutRefineReferences } from "./refine-artifacts";
@@ -59,6 +60,7 @@ export async function scanProducts({ productRoot }: { productRoot: string }): Pr
     const errors: string[] = [];
     let status: ProductSummary["status"] = "ready";
     let baseImage: string | null = baseFiles[0] ?? null;
+    let variantMetadata: ShapeVariantMetadata | null = null;
 
     if (baseFiles.length === 0) {
       status = "missing_base";
@@ -70,6 +72,22 @@ export async function scanProducts({ productRoot }: { productRoot: string }): Pr
       errors.push(`Multiple base images found in ${entry.name}: ${baseFiles.join(", ")}. Keep exactly one base.* file.`);
     }
 
+    if (files.some((file) => file.name === "variant.json")) {
+      try {
+        const metadataPath = path.join(productDir, "variant.json");
+        const metadataInfo = await lstat(metadataPath);
+        if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink()) throw new Error("variant.json must be a regular file.");
+        variantMetadata = ShapeVariantMetadataSchema.parse(JSON.parse(await readFile(metadataPath, "utf8")));
+        if (entry.name !== `${variantMetadata.sourceProductId}--${variantMetadata.shape}`) {
+          throw new Error(`Variant folder must be named ${variantMetadata.sourceProductId}--${variantMetadata.shape}.`);
+        }
+      } catch (error) {
+        status = "invalid_variant";
+        baseImage = null;
+        errors.push(error instanceof Error ? `Invalid variant metadata: ${error.message}` : "Invalid variant metadata.");
+      }
+    }
+
     const referenceImages =
       status === "missing_base"
         ? discoveredReferenceImages
@@ -78,6 +96,9 @@ export async function scanProducts({ productRoot }: { productRoot: string }): Pr
     products.push({
       id: entry.name,
       name: entry.name,
+      shape: variantMetadata?.shape ?? "area",
+      familyId: variantMetadata?.familyId ?? entry.name,
+      sourceProductId: variantMetadata?.sourceProductId ?? entry.name,
       createdAt: creationTimestamp(linkInfo),
       status,
       baseImage,

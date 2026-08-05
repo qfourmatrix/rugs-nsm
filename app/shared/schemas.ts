@@ -13,6 +13,20 @@ export const AspectRatioSchema = z.enum(SUPPORTED_ASPECT_RATIOS);
 export const ImageSizeSchema = z.enum(SUPPORTED_IMAGE_SIZES);
 export const RugConstructionIdSchema = z.enum(RUG_CONSTRUCTION_IDS);
 export const RefinePatternModeSchema = z.enum(["symmetrical", "asymmetrical", "sos"]);
+export const ProductShapeSchema = z.enum(["area", "runner", "round"]);
+export const ShapeVariantShapeSchema = z.enum(["runner", "round"]);
+export const ShapeVariantStrategySchema = z.enum(["auto", "repeat_border", "endcap", "stripe_band", "focal", "asymmetrical"]);
+export const RoundEdgePolicySchema = z.enum(["bound", "preserve_source", "radial_fringe"]);
+export const ShapeVariantStatusSchema = z.enum([
+  "planned",
+  "queued",
+  "generating",
+  "needs_review",
+  "approved",
+  "failed",
+  "cancelled",
+  "stale"
+]);
 export const SosPaletteIdSchema = z.enum(SOS_PALETTE_IDS);
 export const SosCustomPaletteSchema = z
   .object({
@@ -216,7 +230,18 @@ export const AssetRecordSchema = z.object({
       id: RugConstructionIdSchema,
       name: z.string(),
       prompt: z.string()
-    }).nullable().optional()
+    }).nullable().optional(),
+    shapeVariant: z.object({
+      familyId: z.string().min(1),
+      sourceProductId: z.string().min(1),
+      variantProductId: z.string().min(1),
+      shape: ShapeVariantShapeSchema,
+      strategy: ShapeVariantStrategySchema,
+      runnerRatio: z.number().min(2).max(6).nullable(),
+      roundEdgePolicy: RoundEdgePolicySchema.nullable(),
+      promptVersion: z.string().min(1),
+      runId: z.string().min(1)
+    }).strict().nullable().optional()
   }),
   output: z.object({
     file: z.string().min(1),
@@ -273,3 +298,69 @@ export const RefineRequestSchema = z
     sosDesignChange: z.boolean().default(false)
   })
   .strict();
+
+export const ShapeVariantMetadataSchema = z.object({
+  version: z.literal(1),
+  familyId: z.string().min(1),
+  sourceProductId: z.string().min(1),
+  shape: ShapeVariantShapeSchema,
+  sourceBaseSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  approvedAssetId: z.string().min(1),
+  promptVersion: z.string().min(1),
+  createdAt: z.string().datetime()
+}).strict();
+
+export const ShapeVariantRecordSchema = z.object({
+  id: z.string().min(1),
+  familyId: z.string().min(1),
+  sourceProductId: z.string().min(1),
+  variantProductId: z.string().min(1),
+  shape: ShapeVariantShapeSchema,
+  status: ShapeVariantStatusSchema,
+  strategy: ShapeVariantStrategySchema,
+  runnerRatio: z.number().min(2).max(6).nullable(),
+  roundEdgePolicy: RoundEdgePolicySchema.nullable(),
+  imageSize: z.enum(["2K", "4K"]),
+  candidateCount: z.union([z.literal(1), z.literal(2)]),
+  sourceBaseFile: z.string().min(1),
+  sourceBaseSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  promptVersion: z.string().min(1),
+  prompt: z.string().min(1),
+  candidateAssetIds: z.array(z.string()),
+  approvedAssetId: z.string().nullable(),
+  activeRunId: z.string().nullable(),
+  requestedCandidateCount: z.number().int().nonnegative(),
+  completedCandidateCount: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+}).strict();
+
+export const ShapeVariantCampaignSchema = z.object({
+  version: z.literal(1),
+  updatedAt: z.string().datetime(),
+  variants: z.array(ShapeVariantRecordSchema)
+}).strict();
+
+export const ShapeVariantPrepareRequestSchema = z.object({
+  sourceProductIds: z.array(z.string().min(1)).min(1).max(500),
+  shapes: z.array(ShapeVariantShapeSchema).min(1).max(2).default(["runner", "round"]),
+  strategy: ShapeVariantStrategySchema.default("auto"),
+  runnerRatio: z.number().min(2).max(6).default(3.33),
+  roundEdgePolicy: RoundEdgePolicySchema.default("preserve_source"),
+  imageSize: z.enum(["2K", "4K"]).default("4K"),
+  candidateCount: z.union([z.literal(1), z.literal(2)]).default(1)
+}).strict();
+
+export const ShapeVariantGenerateRequestSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(500)
+}).strict();
+
+export const ShapeVariantApproveRequestSchema = z.object({
+  assetId: z.string().min(1)
+}).strict();
+
+export const ShapeVariantShotsBatchRequestSchema = z.object({
+  productIds: z.array(z.string().min(1)).min(1).max(100),
+  imageSize: z.enum(["2K", "4K"]).default("4K")
+}).strict();

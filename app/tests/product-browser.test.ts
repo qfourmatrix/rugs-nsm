@@ -6,6 +6,9 @@ function product(overrides: Partial<ProductSummary> = {}): ProductSummary {
   return {
     id: "rug-1",
     name: "Rug 1",
+    shape: "area",
+    familyId: "rug-1",
+    sourceProductId: "rug-1",
     createdAt: "2026-07-13T00:00:00.000Z",
     status: "ready",
     baseImage: "base.jpg",

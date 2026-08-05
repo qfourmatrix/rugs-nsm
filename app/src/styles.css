@@ -65,10 +65,16 @@ button:disabled {
 
 .appShell {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) 30px;
+  grid-template-rows: auto minmax(0, 1fr) 30px;
   height: 100vh;
   min-width: 920px;
   overflow: hidden;
+}
+
+.appHeaderStack {
+  position: relative;
+  z-index: 15;
+  min-width: 0;
 }
 
 .topbar {
@@ -4223,4 +4229,460 @@ body.isResizingPanels {
   .productBrowserCard {
     transition: none;
   }
+}
+
+/* Shape-variant studio */
+.shapeFamilyBar {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(420px, 1.5fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+}
+
+.shapeFamilyIdentity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.shapeFamilyIdentity strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shapeFamilyEyebrow,
+.shapeModalEyebrow {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shapeSwitch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 3px;
+  background: #f1f3f6;
+  border: 1px solid #e2e5eb;
+  border-radius: 9px;
+}
+
+.shapeSwitchButton {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 8px;
+  color: #434a56;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.shapeSwitchButton:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.shapeSwitchButton.isSelected {
+  color: var(--text);
+  background: #ffffff;
+  border-color: #cbd1db;
+  box-shadow: 0 1px 2px rgba(20, 25, 35, 0.08);
+}
+
+.shapeSwitchButton > span {
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.shapeStatus {
+  justify-self: end;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.shapeStatus-approved { color: var(--green); }
+.shapeStatus-needs_review { color: var(--violet); }
+.shapeStatus-generating,
+.shapeStatus-queued { color: var(--accent); }
+.shapeStatus-failed,
+.shapeStatus-stale,
+.shapeStatus-cancelled { color: var(--red); }
+
+.productShapeAvailability {
+  display: flex;
+  gap: 4px;
+}
+
+.productShapeAvailability span {
+  padding: 2px 5px;
+  color: #9aa1ac;
+  background: #f1f2f4;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.productShapeAvailability span.isReady {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: #c9e8d5;
+}
+
+.shapeCampaignButton {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 10px;
+  color: #343a44;
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.shapeCampaignButton:hover { background: #f7f8fa; }
+
+.shapeCampaignBadge {
+  display: grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  color: #fff;
+  background: var(--violet);
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.shapeInlineError {
+  padding: 6px 12px;
+  color: var(--red);
+  background: var(--red-soft);
+  border-bottom: 1px solid #efc7c8;
+  font-size: 11px;
+}
+
+.shapeModalOverlay {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(18, 21, 27, 0.56);
+  backdrop-filter: blur(4px);
+}
+
+.shapeWorkshop,
+.shapeCampaignModal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1180px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+  overflow: hidden;
+  background: #f8f9fb;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 13px;
+  box-shadow: 0 24px 80px rgba(8, 12, 20, 0.34);
+}
+
+.shapeCampaignModal {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  width: min(930px, calc(100vw - 36px));
+}
+
+.shapeModalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 17px 19px 15px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+}
+
+.shapeModalHeader h2 {
+  margin: 3px 0 3px;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.shapeModalHeader p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.shapeModalHeader > button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--muted);
+  background: #f4f5f7;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.shapeWorkshopBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.shapeComparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 15px;
+  overflow: auto;
+}
+
+.shapePreviewCard {
+  display: grid;
+  grid-template-rows: auto minmax(300px, 1fr);
+  min-width: 0;
+  min-height: 430px;
+  margin: 0;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.shapePreviewCard.isCandidate { border-color: rgba(0, 110, 219, 0.42); }
+
+.shapePreviewCard figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.shapePreviewCard figcaption span {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shapePreviewCard figcaption strong { font-size: 11px; }
+
+.shapePreviewCard > img {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: #fff;
+}
+
+.shapePreviewEmpty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 30px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.shapePreviewEmpty strong { color: #333943; font-size: 13px; }
+.shapePreviewEmpty span { max-width: 260px; font-size: 11px; line-height: 1.45; }
+
+.shapeCandidateStrip {
+  grid-column: 1;
+  display: flex;
+  gap: 8px;
+  padding: 0 15px 15px;
+}
+
+.shapeCandidateStrip button {
+  display: grid;
+  grid-template-columns: 52px auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 9px 3px 3px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.shapeCandidateStrip button.isSelected { border-color: var(--accent); box-shadow: inset 0 0 0 1px rgba(0, 110, 219, 0.18); }
+.shapeCandidateStrip img { width: 52px; height: 52px; object-fit: contain; border-radius: 5px; }
+
+.shapeControls {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  padding: 15px;
+  overflow: auto;
+  background: #ffffff;
+  border-left: 1px solid var(--border);
+}
+
+.shapeControls label {
+  display: grid;
+  gap: 5px;
+  color: #4b5360;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.shapeControls select,
+.shapeControls input {
+  width: 100%;
+  min-height: 35px;
+  padding: 6px 9px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.shapeControls label small {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.shapeControlRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.shapeGuardrail,
+.shapePanelError {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 7px;
+  padding: 9px;
+  color: #356044;
+  background: var(--green-soft);
+  border: 1px solid #c9e8d5;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.shapePanelError {
+  color: #8c2a2d;
+  background: var(--red-soft);
+  border-color: #efc7c8;
+}
+
+.shapeActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+  padding-top: 3px;
+}
+
+.controlButton.danger {
+  color: var(--red);
+  background: #fff;
+  border-color: #e5b8ba;
+}
+
+.campaignMetrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 13px 16px;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+}
+
+.campaignMetric {
+  display: grid;
+  gap: 2px;
+  padding: 9px 10px;
+  background: #f5f6f8;
+  border: 1px solid #e4e6eb;
+  border-radius: 7px;
+}
+
+.campaignMetric strong { font-size: 18px; letter-spacing: -0.03em; }
+.campaignMetric span { color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.campaignMetric.isActive { color: var(--accent); background: var(--accent-soft); border-color: #c6ddf7; }
+.campaignMetric.isWarning { color: var(--amber); background: var(--amber-soft); border-color: #efdcaa; }
+
+.campaignSteps {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow: auto;
+}
+
+.campaignStep {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 11px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.campaignStepNumber {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: #fff;
+  background: #343a45;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.campaignStep strong { font-size: 12px; }
+.campaignStep p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.campaignMessage { padding: 10px 16px; color: #345d42; background: var(--green-soft); border-top: 1px solid #c9e8d5; font-size: 11px; }
+
+@media (max-width: 1080px) {
+  .shapeFamilyBar { grid-template-columns: minmax(0, 1fr) minmax(420px, 2fr) auto; }
+  .shapeFamilyIdentity { display: none; }
+  .shapeWorkshopBody { grid-template-columns: minmax(0, 1fr) 300px; }
+  .shapeComparison { grid-template-columns: 1fr; }
+  .shapePreviewCard { min-height: 340px; }
+  .campaignMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

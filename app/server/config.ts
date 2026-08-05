@@ -48,7 +48,7 @@ function resolveProductRoot(value: string | undefined): string {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const providerMode = providerModeFromEnv(env.PROVIDER_MODE);
+  const providerMode = providerModeFromEnv(env.RUGS_PROVIDER_MODE_OVERRIDE ?? env.PROVIDER_MODE);
   const laozhangApiKey = env.LAOZHANG_API_KEY?.trim() || null;
 
   if (providerMode === "laozhang" && !laozhangApiKey) {
@@ -56,8 +56,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   return {
-    port: numberFromEnv(env.APP_PORT ?? env.PORT, 8787),
-    productRoot: resolveProductRoot(env.PRODUCT_ROOT ?? env.APP_PRODUCT_ROOT),
+    port: numberFromEnv(env.RUGS_PORT_OVERRIDE ?? env.APP_PORT ?? env.PORT, 8787),
+    productRoot: resolveProductRoot(env.RUGS_PRODUCT_ROOT_OVERRIDE ?? env.PRODUCT_ROOT ?? env.APP_PRODUCT_ROOT),
     providerMode,
     defaultConcurrency: APP_QUEUE_CONCURRENCY,
     laozhangApiKey,
