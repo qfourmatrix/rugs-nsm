@@ -2324,6 +2324,111 @@ body.isResizingPanels {
   font-weight: 650;
 }
 
+.promptContextNotice {
+  padding: 7px 9px;
+  color: #174f32;
+  background: #eefaf3;
+  border: 1px solid #cbead8;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.shapeShotProfile {
+  display: grid;
+  gap: 7px;
+  margin-top: 7px;
+  padding: 10px;
+  color: #17324a;
+  background: #f4f9ff;
+  border: 1px solid #cfe1f4;
+  border-radius: var(--radius);
+}
+
+.shapeShotProfileHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shapeShotProfileHeader > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.shapeShotProfileHeader strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shapeProfileStatus {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  color: #174f32;
+  background: #e7f7ed;
+  border: 1px solid #c6e7d2;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.shapeShotProfile > p,
+.shapeShotProfile li,
+.shapeProfileDetails summary {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.shapeShotProfile > p {
+  margin: 0;
+}
+
+.shapeShotProfile ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 17px;
+}
+
+.shapeShotProfile .shapeProfileCustomNote {
+  padding: 6px 7px;
+  color: #6a4a12;
+  background: #fff8e8;
+  border: 1px solid #eedcae;
+  border-radius: 6px;
+}
+
+.shapeProfileDetails {
+  min-width: 0;
+}
+
+.shapeProfileDetails summary {
+  width: max-content;
+  max-width: 100%;
+  color: var(--accent);
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.shapeProfileDetails pre {
+  max-height: 260px;
+  margin: 7px 0 0;
+  padding: 9px;
+  overflow: auto;
+  color: #263447;
+  background: #ffffff;
+  border: 1px solid #dbe7f3;
+  border-radius: 7px;
+  font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .settingsGrid {
   display: grid;
   grid-template-columns: 1.2fr 0.75fr 0.75fr;

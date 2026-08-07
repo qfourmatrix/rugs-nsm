@@ -1,5 +1,9 @@
 import path from "node:path";
-import { PLACEHOLDER_MASTER_SHOTS } from "../shared/constants";
+import {
+  BEDROOM_BACKGROUND_TYPE,
+  BEDROOM_SHOT_OVERRIDES,
+  PLACEHOLDER_MASTER_SHOTS
+} from "../shared/constants";
 import type { MasterShots } from "../shared/types";
 import { MasterShotsSchema } from "../shared/schemas";
 import { AppError } from "./errors";
@@ -15,6 +19,24 @@ export async function validateMasterShots(value: unknown): Promise<MasterShots> 
   return parsed.data;
 }
 
+function withBuiltInBedroomOverrides(masterShots: MasterShots): MasterShots {
+  return {
+    ...masterShots,
+    shots: masterShots.shots.map((shot) => {
+      const builtInOverride = BEDROOM_SHOT_OVERRIDES[shot.id];
+      if (!builtInOverride) return shot;
+
+      return {
+        ...shot,
+        backgroundTypeOverrides: {
+          [BEDROOM_BACKGROUND_TYPE]: builtInOverride,
+          ...shot.backgroundTypeOverrides
+        }
+      };
+    })
+  };
+}
+
 export async function loadMasterShots({ productRoot }: { productRoot: string }): Promise<MasterShots> {
   await ensureDir(productRoot);
   const masterPath = path.join(productRoot, "master-shots.json");
@@ -24,7 +46,7 @@ export async function loadMasterShots({ productRoot }: { productRoot: string }):
     return PLACEHOLDER_MASTER_SHOTS;
   }
 
-  return validateMasterShots(await readJsonFile(masterPath));
+  return withBuiltInBedroomOverrides(await validateMasterShots(await readJsonFile(masterPath)));
 }
 
 export async function saveMasterShots({ productRoot, masterShots }: { productRoot: string; masterShots: unknown }): Promise<MasterShots> {

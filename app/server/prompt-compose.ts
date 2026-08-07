@@ -3,6 +3,7 @@ import type {
   GenerationConstructionSnapshot,
   GenerationLabelLogoSnapshot
 } from "../shared/types";
+import type { ResolvedBackgroundTypeOverride } from "../shared/contextual-prompts";
 import type { ShapeShotContext } from "../shared/shape-shot-prompts";
 import {
   FORBIDDEN_RUG_CHANGES,
@@ -161,23 +162,54 @@ export function composeGenerationPrompt({
   background,
   labelLogo,
   construction,
+  backgroundTypeOverride = null,
   shapeContext = null
 }: {
   prompt: string;
   background: GenerationBackgroundSnapshot | null;
   labelLogo: GenerationLabelLogoSnapshot | null;
   construction: GenerationConstructionSnapshot | null;
+  backgroundTypeOverride?: ResolvedBackgroundTypeOverride | null;
   shapeContext?: ShapeShotContext | null;
 }) {
   const composed = normalizeJsonPrompt(prompt, construction);
 
+  if (backgroundTypeOverride) {
+    Object.assign(composed, backgroundTypeOverride.override);
+    composed.context_variant = {
+      background_type: backgroundTypeOverride.backgroundType,
+      source: "master_shot_background_type_override"
+    };
+  }
+
   if (shapeContext) {
-    if (shapeContext.override) Object.assign(composed, shapeContext.override);
+    if (shapeContext.customPromptActive) {
+      composed.operator_customization = {
+        priority: "Secondary to the mandatory shape profile. Honor these operator edits only where they do not conflict with product geometry, shot framing, room fidelity, label placement, or the validation checks below.",
+        requested_scene: composed.scene,
+        requested_rug_placement: composed.rug_placement,
+        requested_camera: composed.camera,
+        requested_lighting: composed.lighting,
+        requested_styling: composed.styling,
+        requested_quality: composed.quality,
+        requested_output_requirements: composed.output_requirements
+      };
+    }
+    Object.assign(composed, shapeContext.override);
     composed.shape_context = {
       product_shape: shapeContext.shape,
+      shot_profile: shapeContext.profile.id,
+      shot_label: shapeContext.profile.label,
+      composition_goal: shapeContext.profile.purpose,
       identity_lock: shapeContext.identityInstruction,
       background_compatibility: shapeContext.backgroundCompatibility,
-      priority: "This shape identity lock is mandatory and overrides scene or background suggestions that imply a different rug shape."
+      recommended_background_types: shapeContext.profile.recommendedBackgroundTypes,
+      validation_checks: shapeContext.profile.validationChecks,
+      reject_if: shapeContext.profile.rejectConditions,
+      custom_prompt_policy: shapeContext.customPromptActive
+        ? "The operator customized the source prompt. Preserve it as secondary guidance, but the shape-specific shot profile remains mandatory and its scene, placement, camera, lighting, styling, quality, and output contract take precedence."
+        : "The canonical shape-specific shot profile is active.",
+      priority: "Mandatory final shape-and-shot contract. It overrides source prompt edits, room suggestions, or styling instructions that would weaken the approved product shape, product identity, or shot-specific composition."
     };
   }
 
@@ -187,7 +219,7 @@ export function composeGenerationPrompt({
       id: background.id,
       title: background.title,
       instruction:
-        "Secondary room context only. Use this background for architecture, furniture, room materials, lighting, and camera context. Ignore room-context wording that suggests rug type, rug style, textile construction, product design, product colors, or product suitability.",
+        "Text-only secondary room context. Reconstruct the room from the selected background prompt; no room reference image is attached. Use this context for architecture, furniture, room materials, lighting, and camera guidance. Ignore room-context wording that suggests rug type, rug style, textile construction, product design, product colors, or product suitability. Image 1 remains the only product identity reference.",
       prompt: sanitizedBackground
     };
   }

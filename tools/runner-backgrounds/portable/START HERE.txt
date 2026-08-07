@@ -1,0 +1,34 @@
+RUGS NSM — RUNNER BACKGROUND ADD-ON
+
+This merge-safe add-on installs:
+- 194 Runner Foyer backgrounds
+- 383 Runner Hallway backgrounds
+- 577 Runner backgrounds total
+
+INSTALL
+1. Stop RUGS NSM if it is open.
+2. Keep this whole extracted folder together.
+3. Control-click “INSTALL RUNNER BACKGROUNDS.command”, choose Open, then confirm.
+4. The installer normally finds “Documents/RUGS NSM” automatically. If it does not, choose the existing RUGS NSM folder.
+5. Start RUGS NSM. Open Manage Library and press Rescan only if the app was already open.
+
+If the app is too old, the installer stops before changing anything and tells you to run “3 Update RUGS NSM.command” first.
+
+WHAT THE INSTALLER PROTECTS
+- It reads the recipient’s currently connected manifest instead of assuming their library matches the owner’s.
+- It verifies the app has the merge-safe Runner release before touching data.
+- It preserves every ordinary Area/Round background, field, order, usage record, and label setting.
+- It removes/replaces only records explicitly typed runner_foyer or runner_hallway.
+- It never overwrites background-library.jsonl.
+- It creates/updates background-library-with-runner.jsonl and connects that merged file.
+- It copies files only into “Runner Foyer” and “Runner Hallway” folders.
+- It creates timestamped backups in data/nsm100k/.runner-background-install-backups/.
+- Running it again is safe and does not duplicate Runner records.
+
+EXPECTED RESULT
+- Existing normal background count: unchanged
+- Runner Wide Room Hero: 577 choices
+- Runner High-Angle Lifestyle Detail: 577 choices
+- Area and Round pickers: Runner-only rooms are hidden by the Runner-compatible app release
+
+The room JPEGs are picker previews. Generation uses each matching reverse-engineered TXT room prompt; room preview images are not attached to provider requests.

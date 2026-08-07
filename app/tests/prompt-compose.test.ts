@@ -3,6 +3,7 @@ import {
   composeGenerationPrompt,
   sanitizeBackgroundPrompt
 } from "../server/prompt-compose";
+import { resolveShotBackgroundTypeOverride } from "../shared/contextual-prompts";
 import {
   FORBIDDEN_RUG_CHANGES,
   PLACEHOLDER_MASTER_SHOTS,
@@ -96,6 +97,109 @@ describe("generation prompt composition", () => {
     expect(parsed.forbidden_changes).toEqual([...FORBIDDEN_RUG_CHANGES]);
     expect(keys.indexOf("rug_reference_lock")).toBeLessThan(keys.indexOf("scene"));
     expect(keys.indexOf("allowed_rug_material_instruction")).toBeLessThan(keys.indexOf("scene"));
+  });
+
+  it("uses the background prompt as text-only room context while keeping Image 1 as the rug", () => {
+    const parsed = parsePrompt(
+      composeGenerationPrompt({
+        prompt: makeShot({ id: "wide_room_hero" }).prompt,
+        background: {
+          id: "runner-hall-1",
+          type: "runner_hallway",
+          title: "Runner Hall",
+          prompt: "FINAL REUSABLE ROOM PROMPT: Preserve the selected hall architecture.",
+          previewImagePath: "../Preping bgs/Runner Hallway/KEEP/hall.jpg"
+        },
+        labelLogo: null,
+        construction: null
+      })
+    );
+    const backgroundContext = parsed.background_context as { instruction: string };
+
+    expect(backgroundContext.instruction).toMatch(/Text-only secondary room context/i);
+    expect(backgroundContext.instruction).toMatch(/no room reference image is attached/i);
+    expect(backgroundContext.instruction).not.toMatch(/Image 2/i);
+    expect(backgroundContext.instruction).toMatch(/Image 1 remains the only product identity reference/i);
+  });
+
+  it("activates the bedroom override for an untouched master prompt", () => {
+    const shot = PLACEHOLDER_MASTER_SHOTS.shots.find((candidate) => candidate.id === "wide_room_hero");
+    expect(shot).toBeDefined();
+
+    const background = {
+      id: "bedroom-1",
+      type: " Bedroom ",
+      title: "Bedroom One",
+      prompt: "FINAL REUSABLE ROOM PROMPT: Reconstruct the selected bedroom.",
+      previewImagePath: null
+    };
+    const backgroundTypeOverride = resolveShotBackgroundTypeOverride({
+      shot: shot ?? null,
+      prompt: shot?.prompt ?? "",
+      backgroundType: background.type
+    });
+    const parsed = parsePrompt(
+      composeGenerationPrompt({
+        prompt: shot?.prompt ?? "",
+        background,
+        labelLogo: null,
+        construction: null,
+        backgroundTypeOverride
+      })
+    );
+
+    expect(backgroundTypeOverride?.backgroundType).toBe("bedroom");
+    expect(parsed.scene).toMatch(/Bedroom-specific wide lifestyle hero/i);
+    expect(parsed.rug_placement).toMatch(/beneath the lower portion of the bed/i);
+    expect(parsed.camera).toMatch(/foot or foot-side of the bed/i);
+    expect(parsed.context_variant).toEqual({
+      background_type: "bedroom",
+      source: "master_shot_background_type_override"
+    });
+  });
+
+  it("does not replace a custom prompt with the bedroom override", () => {
+    const shot = PLACEHOLDER_MASTER_SHOTS.shots.find((candidate) => candidate.id === "high_angle_lifestyle");
+    expect(shot).toBeDefined();
+
+    const customPrompt = "Custom operator bedroom composition.";
+    const backgroundTypeOverride = resolveShotBackgroundTypeOverride({
+      shot: shot ?? null,
+      prompt: customPrompt,
+      backgroundType: "bedroom"
+    });
+    const parsed = parsePrompt(
+      composeGenerationPrompt({
+        prompt: customPrompt,
+        background: {
+          id: "bedroom-2",
+          type: "bedroom",
+          title: "Bedroom Two",
+          prompt: "ROOM TYPE: bedroom.",
+          previewImagePath: null
+        },
+        labelLogo: null,
+        construction: null,
+        backgroundTypeOverride
+      })
+    );
+
+    expect(backgroundTypeOverride).toBeNull();
+    expect(parsed.scene).toBe(customPrompt);
+    expect(parsed.context_variant).toBeUndefined();
+  });
+
+  it("falls back to the normal shot prompt for other background types", () => {
+    const shot = PLACEHOLDER_MASTER_SHOTS.shots.find((candidate) => candidate.id === "wide_room_hero");
+    expect(shot).toBeDefined();
+
+    const backgroundTypeOverride = resolveShotBackgroundTypeOverride({
+      shot: shot ?? null,
+      prompt: shot?.prompt ?? "",
+      backgroundType: "architectural_living"
+    });
+
+    expect(backgroundTypeOverride).toBeNull();
   });
 
   it("preserves the studio corner crop lock in the composed generation request", () => {

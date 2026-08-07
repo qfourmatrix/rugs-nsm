@@ -5,7 +5,9 @@ import type {
   BackgroundLibraryState,
   BackgroundRecord,
   GenerationBackgroundSnapshot,
-  GenerationLabelLogoSnapshot
+  GenerationLabelLogoSnapshot,
+  RunnerBackgroundArchetype,
+  RunnerRoomShotId
 } from "../shared/types";
 import { validationError } from "./errors";
 import { atomicWriteJson, ensureDir, imageMimeType, pathExists, sha256File } from "./fsUtils";
@@ -25,15 +27,6 @@ interface PersistedBackgroundState {
   }>;
 }
 
-interface ManifestEntry {
-  id: string;
-  type: string;
-  title: string;
-  prompt?: string;
-  promptPath?: string;
-  previewImagePath?: string;
-}
-
 interface ParsedManifestEntry {
   id: string;
   type: string;
@@ -41,6 +34,8 @@ interface ParsedManifestEntry {
   prompt: string;
   promptPath: string | null;
   previewImagePath: string | null;
+  runnerArchetype: RunnerBackgroundArchetype | null;
+  runnerShotCompatibility: RunnerRoomShotId[];
 }
 
 export interface LoadedBackgroundRecord extends BackgroundRecord {
@@ -54,6 +49,15 @@ export interface LoadedBackgroundLibraryState extends Omit<BackgroundLibraryStat
 const stateDirname = ".product-shot-queue";
 const stateFilename = "background-library.json";
 const previewPathCache = new Map<string, Map<string, string>>();
+const runnerRoomShotIds = new Set<RunnerRoomShotId>(["wide_room_hero", "high_angle_lifestyle"]);
+const runnerBackgroundArchetypes = new Set<RunnerBackgroundArchetype>([
+  "long_hallway_gallery",
+  "entry_foyer_lane",
+  "open_living_circulation",
+  "bedside_passage",
+  "kitchen_galley_transition",
+  "stair_landing_corridor"
+]);
 
 function statePath(productRoot: string) {
   return path.join(productRoot, stateDirname, stateFilename);
@@ -156,6 +160,44 @@ function assertString(value: unknown, field: string, lineNumber: number) {
   return value.trim();
 }
 
+function parseRunnerArchetype(value: unknown, lineNumber: number): RunnerBackgroundArchetype | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !runnerBackgroundArchetypes.has(value as RunnerBackgroundArchetype)) {
+    throw validationError(
+      "INVALID_BACKGROUND_MANIFEST",
+      `Line ${lineNumber}: runnerArchetype must be a supported Runner archetype.`
+    );
+  }
+  return value as RunnerBackgroundArchetype;
+}
+
+function parseRunnerShotCompatibility(value: unknown, lineNumber: number): RunnerRoomShotId[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw validationError(
+      "INVALID_BACKGROUND_MANIFEST",
+      `Line ${lineNumber}: runnerShotCompatibility must be an array.`
+    );
+  }
+
+  const shotIds = value.map((item) => {
+    if (typeof item !== "string" || !runnerRoomShotIds.has(item as RunnerRoomShotId)) {
+      throw validationError(
+        "INVALID_BACKGROUND_MANIFEST",
+        `Line ${lineNumber}: runnerShotCompatibility contains unsupported shot id ${String(item)}.`
+      );
+    }
+    return item as RunnerRoomShotId;
+  });
+  if (new Set(shotIds).size !== shotIds.length) {
+    throw validationError(
+      "INVALID_BACKGROUND_MANIFEST",
+      `Line ${lineNumber}: runnerShotCompatibility must not contain duplicates.`
+    );
+  }
+  return shotIds;
+}
+
 async function parseManifestLine(
   line: string,
   lineNumber: number,
@@ -172,6 +214,14 @@ async function parseManifestLine(
   const id = assertString(parsed.id, "id", lineNumber);
   const type = assertString(parsed.type, "type", lineNumber);
   const title = assertString(parsed.title, "title", lineNumber);
+  const runnerArchetype = parseRunnerArchetype(parsed.runnerArchetype, lineNumber);
+  const runnerShotCompatibility = parseRunnerShotCompatibility(parsed.runnerShotCompatibility, lineNumber);
+  if (runnerShotCompatibility.length > 0 && !runnerArchetype) {
+    throw validationError(
+      "INVALID_BACKGROUND_MANIFEST",
+      `Line ${lineNumber}: runnerArchetype is required when runnerShotCompatibility is declared.`
+    );
+  }
   const promptPath =
     typeof parsed.promptPath === "string" && parsed.promptPath.trim()
       ? await resolveProductLibraryPath(parsed.promptPath, productRoot, manifestDir)
@@ -187,10 +237,28 @@ async function parseManifestLine(
     throw validationError("INVALID_BACKGROUND_MANIFEST", `Line ${lineNumber}: prompt or promptPath is required.`);
   }
 
-  return { id, type, title, prompt, promptPath, previewImagePath };
+  return {
+    id,
+    type,
+    title,
+    prompt,
+    promptPath,
+    previewImagePath,
+    runnerArchetype,
+    runnerShotCompatibility
+  };
 }
 
-function fingerprintBackground(entry: Pick<LoadedBackgroundRecord, "id" | "type" | "title" | "prompt" | "previewImagePath" | "promptPath">) {
+function fingerprintBackground(entry: Pick<LoadedBackgroundRecord,
+  | "id"
+  | "type"
+  | "title"
+  | "prompt"
+  | "previewImagePath"
+  | "promptPath"
+  | "runnerArchetype"
+  | "runnerShotCompatibility"
+>) {
   return crypto
     .createHash("sha256")
     .update(JSON.stringify(entry))
@@ -351,7 +419,9 @@ export async function getBackgroundSnapshot({
     prompt: background.prompt,
     previewImagePath: background.previewImagePath
       ? portablePathFromProductRoot(productRoot, background.previewImagePath)
-      : null
+      : null,
+    runnerArchetype: background.runnerArchetype,
+    runnerShotCompatibility: background.runnerShotCompatibility
   };
 }
 

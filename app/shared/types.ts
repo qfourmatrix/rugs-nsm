@@ -10,6 +10,14 @@ export type ShotAggregateState = "empty" | "generating" | "accepted" | "review_n
 export type RugConstructionId = "flatweave" | "low_pile" | "high_pile" | "mixed_high_low" | "unknown_custom";
 export type RefinePatternMode = "symmetrical" | "asymmetrical" | "sos";
 export type ProductShape = "area" | "runner" | "round";
+export type RunnerRoomShotId = "wide_room_hero" | "high_angle_lifestyle";
+export type RunnerBackgroundArchetype =
+  | "long_hallway_gallery"
+  | "entry_foyer_lane"
+  | "open_living_circulation"
+  | "bedside_passage"
+  | "kitchen_galley_transition"
+  | "stair_landing_corridor";
 export type ShapeVariantShape = Exclude<ProductShape, "area">;
 export type ShapeVariantStrategy = "auto" | "repeat_border" | "endcap" | "stripe_band" | "focal" | "asymmetrical";
 export type RoundEdgePolicy = "bound" | "preserve_source" | "radial_fringe";
@@ -27,6 +35,7 @@ export interface Shot {
   id: string;
   name: string;
   prompt: string;
+  backgroundTypeOverrides?: Record<string, ShotPromptOverride>;
   defaultAspectRatio: AspectRatio;
   defaultImageSize: ImageSize;
 }
@@ -167,6 +176,8 @@ export interface BackgroundRecord {
   id: string;
   type: string;
   title: string;
+  runnerArchetype: RunnerBackgroundArchetype | null;
+  runnerShotCompatibility: RunnerRoomShotId[];
   previewImagePath: string | null;
   promptPath: string | null;
   fingerprint: string;
@@ -194,6 +205,8 @@ export interface GenerationBackgroundSnapshot {
   title: string;
   prompt: string;
   previewImagePath: string | null;
+  runnerArchetype?: RunnerBackgroundArchetype | null;
+  runnerShotCompatibility?: RunnerRoomShotId[];
 }
 
 export interface GenerationLabelLogoSnapshot {

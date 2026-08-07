@@ -19,6 +19,8 @@ import type {
 } from "../shared/types";
 import { composeSosRefinePrompt } from "../shared/sos-palettes";
 import { BACKGROUND_REQUIRED_SHOT_IDS, LABEL_REQUIRED_SHOT_IDS, RUG_CONSTRUCTION_OPTIONS } from "../shared/constants";
+import { isBackgroundCompatibleForShot } from "../shared/background-compatibility";
+import { resolveShotBackgroundTypeOverride } from "../shared/contextual-prompts";
 import { resolveShapeShotContext } from "../shared/shape-shot-prompts";
 import {
   BulkGenerateRequestSchema,
@@ -53,6 +55,7 @@ import { ensureDir, imageMimeType, pathExists, safeChildPath, sha256File, SUPPOR
 import { loadMasterShots, saveMasterShots } from "./master-shots";
 import { loadPersistedJobs, savePersistedJobs } from "./job-store";
 import { composeGenerationPrompt } from "./prompt-compose";
+import { assertRetryBackgroundAllowed } from "./background-guard";
 import { parseLaoZhangImageResponse, buildLaoZhangRequest } from "./providers/laozhang";
 import { JobRegistry, selectGenerateMissingShots } from "./queue";
 import { compareProductsByCreatedAt, scanProducts, resolveProductImagePath } from "./scanner";
@@ -210,6 +213,15 @@ async function prepareGeneration({
     throw validationError("BACKGROUND_REQUIRED", `${shot.name} requires a selected background for this rug.`);
   }
 
+  if (background && !isBackgroundCompatibleForShot({ productShape, shotId: shot.id, background })) {
+    throw validationError(
+      "BACKGROUND_INCOMPATIBLE",
+      productShape === "runner"
+        ? `${background.title} is not a Runner Foyer/Hallway background. Select one of those Runner room types.`
+        : `${background.title} is reserved for Runner rugs. Select a standard Area/Round room background.`
+    );
+  }
+
   const labelLogo = requiresLabelLogo(shot.id)
     ? await getLabelLogoSnapshot({ productRoot: config.productRoot })
     : null;
@@ -224,6 +236,11 @@ async function prepareGeneration({
       background,
       labelLogo,
       construction,
+      backgroundTypeOverride: resolveShotBackgroundTypeOverride({
+        shot,
+        prompt,
+        backgroundType: background?.type
+      }),
       shapeContext: resolveShapeShotContext({
         shape: productShape,
         shot,
@@ -754,7 +771,10 @@ async function runGeneration(item: QueuedGeneration) {
           base64: await fs.readFile(labelLogoPath, "base64")
         }
       : null;
-    const providerReferences = labelReference ? [labelReference, ...references] : references;
+    const providerReferences = [
+      ...(labelReference ? [labelReference] : []),
+      ...references
+    ];
     const existing = await listGeneratedAssets({ productRoot: config.productRoot, productId: item.productId });
     const existingAssetIds = new Set([...existing.active, ...existing.trash].map((asset) => asset.assetId));
     assetId = buildAssetBasename({ shotId: item.shot.id, existingAssetIds });
@@ -1779,6 +1799,9 @@ app.post(
   asyncRoute(async (req, res) => {
     const productId = req.params.productId as string;
     const product = await assertReadyProduct(productId);
+    const currentBackgroundLibrary = product.shape === "runner"
+      ? await scanBackgroundLibrary({ productRoot: config.productRoot })
+      : null;
     const parsed = BulkGenerateRequestSchema.parse(req.body);
     const referenceImages = validateReferenceImages(product, parsed.referenceImages);
     const masterShots = await loadMasterShots({ productRoot: config.productRoot });
@@ -1807,9 +1830,14 @@ app.post(
         const background = asset.inputs.background ?? null;
         const labelLogo = requiresLabelLogo(asset.shotId) ? asset.inputs.labelLogo ?? null : null;
         const construction = asset.inputs.construction ?? null;
-        if (requiresBackground(asset.shotId) && !background) {
-          throw validationError("BACKGROUND_REQUIRED", `${asset.shotName} retry requires saved background metadata.`);
-        }
+        assertRetryBackgroundAllowed({
+          backgroundRequired: requiresBackground(asset.shotId),
+          productShape: product.shape,
+          shotId: asset.shotId,
+          shotName: asset.shotName,
+          savedBackground: background,
+          currentBackgrounds: currentBackgroundLibrary?.backgrounds ?? []
+        });
         if (requiresLabelLogo(asset.shotId) && !labelLogo) {
           throw validationError("LABEL_LOGO_REQUIRED", `${asset.shotName} retry requires saved label-logo metadata.`);
         }
@@ -1866,6 +1894,9 @@ app.post(
     const productId = req.params.productId as string;
     const assetId = req.params.assetId as string;
     const product = await assertReadyProduct(productId);
+    const currentBackgroundLibrary = product.shape === "runner"
+      ? await scanBackgroundLibrary({ productRoot: config.productRoot })
+      : null;
     const generated = await listProductGenerated(productId);
     const asset = [...generated.active, ...generated.trash].find((candidate) => candidate.assetId === assetId);
     if (!asset) throw notFoundError("ASSET_NOT_FOUND", "Asset not found.");
@@ -1881,9 +1912,14 @@ app.post(
     const background = asset.inputs.background ?? null;
     const labelLogo = requiresLabelLogo(asset.shotId) ? asset.inputs.labelLogo ?? null : null;
     const construction = asset.inputs.construction ?? null;
-    if (requiresBackground(asset.shotId) && !background) {
-      throw validationError("BACKGROUND_REQUIRED", `${asset.shotName} retry requires saved background metadata.`);
-    }
+    assertRetryBackgroundAllowed({
+      backgroundRequired: requiresBackground(asset.shotId),
+      productShape: product.shape,
+      shotId: asset.shotId,
+      shotName: asset.shotName,
+      savedBackground: background,
+      currentBackgrounds: currentBackgroundLibrary?.backgrounds ?? []
+    });
     if (requiresLabelLogo(asset.shotId) && !labelLogo) {
       throw validationError("LABEL_LOGO_REQUIRED", `${asset.shotName} retry requires saved label-logo metadata.`);
     }
