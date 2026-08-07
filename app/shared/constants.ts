@@ -1,4 +1,11 @@
-import type { AspectRatio, ImageSize, MasterShots, ProductState, RugConstructionOption } from "./types";
+import type {
+  AspectRatio,
+  ImageSize,
+  MasterShots,
+  ProductState,
+  RugConstructionOption,
+  ShotPromptOverride
+} from "./types";
 import { DEFAULT_SOS_CUSTOM_PALETTE } from "./sos-palettes";
 
 export const SUPPORTED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
@@ -83,6 +90,43 @@ const detailCropScaleLock = `Detail crop scale lock: this is a close camera crop
 
 const cleanStudioBackgroundLock = `Clean background lock: any visible non-rug area must be plain flat white with no depth cues, no texture, no tiles, no panels, no square or rectangular patches, no ghost rectangles, no blurred fabric blocks, no bokeh, no stains, no smudges, no decorative shadows, and no out-of-focus background objects. Do not render a physical studio floor, paper sweep, wall, prop, reflection, or contact patch in the empty area. Shadows may appear only as very subtle contact shadows immediately under the rug edge or fringe, never as detached blocks.`;
 
+export const BEDROOM_BACKGROUND_TYPE = "bedroom";
+
+export const BEDROOM_SHOT_OVERRIDES: Record<string, ShotPromptOverride> = {
+  wide_room_hero: {
+    scene:
+      "Bedroom-specific wide lifestyle hero. Reconstruct the selected bedroom faithfully as secondary context, keeping its bed, headboard, nightstands, windows, architecture, materials, and lighting recognizable. Present Image 1 as the only rug, naturally integrated into the bed zone. Do not convert the bedroom into a living room and do not add a sofa, lounge grouping, or coffee table.",
+    rug_placement:
+      "Follow the selected background's documented bedroom rug-placement zone. Place the locked Image 1 rug flat beneath the lower portion of the bed, normally aligned with the bed and extending plausibly beyond both sides and the foot. Keep a broad, readable rug field visible at the foot and sides, with realistic bed or bench overlap only where the selected room requires it. Preserve visible floor clearance from walls, curtains, doors, and thresholds. Never place the rug on the bed, use it as bedding, float it, fold it, duplicate it, or force all four edges into view when the bed naturally hides the rear edge.",
+    camera:
+      "Use the selected bedroom's documented camera side. Position the camera near the foot or foot-side of the bed at approximately waist-to-chest height, with a mild downward angle and a corrected 28-35mm full-frame interior-photography feel. Keep vertical architecture controlled, the bed as the upper or midground anchor, and the visible rug field across roughly the lower third to lower half of the frame.",
+    lighting:
+      "Preserve the selected bedroom's natural window-light direction and practical-light state. Use soft realistic illumination, believable contact shadows beneath the bed and rug, and visible pile depth without changing the rug colors or design.",
+    styling:
+      "Premium editorial bedroom photography with restrained, room-faithful styling. Keep bedding and bedroom furniture secondary to the rug, preserve realistic clearances and scale, and add no living-room furniture or unrelated props.",
+    quality:
+      "Photorealistic bedroom catalogue hero with physically plausible under-bed placement, grounded furniture contact, controlled perspective, accurate rug identity, and no CGI sheen.",
+    output_requirements:
+      "The result must unmistakably read as the selected bedroom, with Image 1 preserved as the exact rug product and placed naturally in the bed zone. Do not substitute a living-room composition or alter any rug geometry, motif, border, color placement, fringe, or proportion."
+  },
+  high_angle_lifestyle: {
+    scene:
+      "Bedroom-specific high-angle oblique lifestyle detail photographed from the foot-side of the selected bed. Reconstruct the selected bedroom faithfully as secondary context. The bed edge, bedding, nightstand, or bench may frame the upper and side boundaries, but the Image 1 rug remains the clear product subject. Do not introduce sofas, coffee tables, or a living-room seating arrangement.",
+    rug_placement:
+      "Follow the selected background's documented bedroom rug-placement zone. Keep the locked rug flat and naturally aligned with the bed, with the bed overlapping only the physically appropriate rear or upper portion. Show a broad uninterrupted field plus truthful visible edges at the foot and sides; partial bedroom furniture may frame the perimeter but must not hide identity-critical motifs, borders, or fringe. Never place the rug on top of the bed, treat it as a blanket, duplicate it, or compress the complete design into the visible crop.",
+    camera:
+      "Camera above the rug near the foot-side of the bed at approximately standing height, angled downward about 50-65 degrees with a natural 35-50mm full-frame lens feel. This is an oblique bedroom photograph, not a ceiling view or flat top-down render. Keep the bed edge in the upper portion of the frame and let the rug occupy roughly 65-80% of the image while respecting the selected room's camera side and architecture.",
+    lighting:
+      "Preserve the selected bedroom's natural light direction, with soft realistic shadows from the bed and nearby furniture, grounded rug edges, and readable pile texture without changing the rug design or colors.",
+    styling:
+      "Premium editorial bedroom lifestyle detail with realistic bedding, floor, and furniture contact. Keep all room elements secondary, avoid clutter, and add no living-room furniture or unrelated styling props.",
+    quality:
+      "Photorealistic high-angle bedroom detail with accurate perspective, plausible under-bed overlap, crisp rug identity, natural textile interaction, and no generic rug substitution or CGI sheen.",
+    output_requirements:
+      "The result must remain a bedroom-specific high-angle rug photograph. Use Image 1 as the exact product spec, preserve its visible design and real motif scale, and allow hidden rug areas to continue physically beneath the bed or beyond the camera crop rather than squeezing the full design into view."
+  }
+};
+
 type RugShotJsonPrompt = {
   shot_id: string;
   prompt_priority_note: string;
@@ -138,6 +182,9 @@ export const PLACEHOLDER_MASTER_SHOTS: MasterShots = {
         output_requirements:
           "Use Image 1 as the product spec, not inspiration. Keep all rug geometry and pattern relationships visually identical to Image 1."
       }),
+      backgroundTypeOverrides: {
+        [BEDROOM_BACKGROUND_TYPE]: BEDROOM_SHOT_OVERRIDES.wide_room_hero
+      },
       defaultAspectRatio: "1:1",
       defaultImageSize: "4K"
     },
@@ -163,6 +210,9 @@ export const PLACEHOLDER_MASTER_SHOTS: MasterShots = {
         output_requirements:
           "Use Image 1 as the product spec, not inspiration. Keep all rug geometry and pattern relationships visually identical to Image 1."
       }),
+      backgroundTypeOverrides: {
+        [BEDROOM_BACKGROUND_TYPE]: BEDROOM_SHOT_OVERRIDES.high_angle_lifestyle
+      },
       defaultAspectRatio: "1:1",
       defaultImageSize: "4K"
     },

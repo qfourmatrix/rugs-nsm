@@ -14,6 +14,15 @@ export const ImageSizeSchema = z.enum(SUPPORTED_IMAGE_SIZES);
 export const RugConstructionIdSchema = z.enum(RUG_CONSTRUCTION_IDS);
 export const RefinePatternModeSchema = z.enum(["symmetrical", "asymmetrical", "sos"]);
 export const ProductShapeSchema = z.enum(["area", "runner", "round"]);
+export const RunnerRoomShotIdSchema = z.enum(["wide_room_hero", "high_angle_lifestyle"]);
+export const RunnerBackgroundArchetypeSchema = z.enum([
+  "long_hallway_gallery",
+  "entry_foyer_lane",
+  "open_living_circulation",
+  "bedside_passage",
+  "kitchen_galley_transition",
+  "stair_landing_corridor"
+]);
 export const ShapeVariantShapeSchema = z.enum(["runner", "round"]);
 export const ShapeVariantStrategySchema = z.enum(["auto", "repeat_border", "endcap", "stripe_band", "focal", "asymmetrical"]);
 export const RoundEdgePolicySchema = z.enum(["bound", "preserve_source", "radial_fringe"]);
@@ -48,10 +57,21 @@ function containsForbiddenCoverage(items: unknown, pattern: RegExp) {
   return Array.isArray(items) && items.some((item) => typeof item === "string" && pattern.test(item));
 }
 
+const ShotPromptOverrideSchema = z.object({
+  scene: z.string().trim().min(1),
+  rug_placement: z.string().trim().min(1),
+  camera: z.string().trim().min(1),
+  lighting: z.string().trim().min(1).optional(),
+  styling: z.string().trim().min(1).optional(),
+  quality: z.string().trim().min(1).optional(),
+  output_requirements: z.string().trim().min(1).optional()
+}).strict();
+
 export const ShotSchema = z.object({
   id: z.string().regex(/^[a-z0-9_]+$/),
   name: z.string().min(1),
   prompt: z.string().min(1),
+  backgroundTypeOverrides: z.record(z.string().regex(/^[a-z0-9_]+$/), ShotPromptOverrideSchema).optional(),
   defaultAspectRatio: AspectRatioSchema,
   defaultImageSize: ImageSizeSchema
 }).superRefine((shot, ctx) => {
@@ -218,7 +238,9 @@ export const AssetRecordSchema = z.object({
       type: z.string(),
       title: z.string(),
       prompt: z.string(),
-      previewImagePath: z.string().nullable()
+      previewImagePath: z.string().nullable(),
+      runnerArchetype: RunnerBackgroundArchetypeSchema.nullable().optional(),
+      runnerShotCompatibility: z.array(RunnerRoomShotIdSchema).optional()
     }).nullable().optional(),
     labelLogo: z.object({
       file: z.string(),

@@ -1,5 +1,6 @@
 import { CheckCircle2, Image as ImageIcon, Layers2, Pencil, Ratio, Save } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import type { ShapeShotProfile } from "../../shared/shape-shot-prompts";
 import type { AspectRatio, ImageSize, ProductState } from "../../shared/types";
 
 const aspectRatios: AspectRatio[] = ["1:1", "16:9", "9:16", "4:3", "3:4"];
@@ -12,6 +13,9 @@ interface PromptSettingsProps {
   saving: boolean;
   title?: string;
   emptyLabel?: string;
+  contextNotice?: string | null;
+  shapeProfile?: ShapeShotProfile | null;
+  customPromptActive?: boolean;
   actions?: ReactNode;
   settingsExtra?: ReactNode;
   onPromptChange: (value: string) => void;
@@ -24,6 +28,9 @@ export function PromptSettings({
   saving,
   title = "Prompt",
   emptyLabel = "Pick a shot to load its prompt",
+  contextNotice = null,
+  shapeProfile = null,
+  customPromptActive = false,
   actions,
   settingsExtra,
   onPromptChange,
@@ -45,6 +52,39 @@ export function PromptSettings({
           {saving ? "Saving" : state?.promptBox.dirty ? "Draft saved" : "Saved"}
         </span>
       </div>
+
+      {contextNotice ? <div className="promptContextNotice">{contextNotice}</div> : null}
+
+      {shapeProfile ? (
+        <section className="shapeShotProfile" aria-label={`${shapeProfile.label} profile`}>
+          <div className="shapeShotProfileHeader">
+            <div>
+              <span className="eyebrow">Mandatory shape profile</span>
+              <strong>{shapeProfile.label}</strong>
+            </div>
+            <span className="shapeProfileStatus">Applied at generation</span>
+          </div>
+          <p>{shapeProfile.purpose}</p>
+          <ul>
+            {shapeProfile.validationChecks.slice(-3).map((check) => <li key={check}>{check}</li>)}
+          </ul>
+          {customPromptActive ? (
+            <p className="shapeProfileCustomNote">
+              Your source prompt remains saved as secondary guidance. These shape directions override any conflicting geometry, placement, or camera instruction.
+            </p>
+          ) : null}
+          <details className="shapeProfileDetails">
+            <summary>View exact applied shape directions</summary>
+            <pre>{JSON.stringify({
+              shot_profile: shapeProfile.id,
+              composition_goal: shapeProfile.purpose,
+              ...shapeProfile.override,
+              validation_checks: shapeProfile.validationChecks,
+              reject_if: shapeProfile.rejectConditions
+            }, null, 2)}</pre>
+          </details>
+        </section>
+      ) : null}
 
       <div className="settingsGrid compactSettingsGrid">
         <fieldset className="segmentedField">

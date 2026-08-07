@@ -62,8 +62,100 @@ describe("background library", () => {
     expect(library.backgrounds.map((item) => item.status)).toEqual(["new", "new"]);
     expect(library.backgrounds.find((item) => item.id === "bedroom-1")).toMatchObject({
       prompt: "Warm bedroom prompt",
-      previewImagePath: previewPath
+      previewImagePath: previewPath,
+      runnerArchetype: null,
+      runnerShotCompatibility: []
     });
+  });
+
+  it("imports validated Runner archetype and shot compatibility metadata", async () => {
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        id: "runner-hall-1",
+        type: "architectural_living",
+        title: "Runner Hall One",
+        prompt: "Long clear gallery prompt",
+        runnerArchetype: "long_hallway_gallery",
+        runnerShotCompatibility: ["wide_room_hero", "high_angle_lifestyle"]
+      })}\n`
+    );
+
+    const library = await setBackgroundManifestPath({ productRoot, manifestPath });
+    const clientLibrary = toClientBackgroundLibraryState(library);
+    const snapshot = await getBackgroundSnapshot({ productRoot, backgroundId: "runner-hall-1" });
+
+    expect(library.errors).toEqual([]);
+    expect(clientLibrary.backgrounds[0]).toMatchObject({
+      runnerArchetype: "long_hallway_gallery",
+      runnerShotCompatibility: ["wide_room_hero", "high_angle_lifestyle"]
+    });
+    expect(snapshot).toMatchObject({
+      runnerArchetype: "long_hallway_gallery",
+      runnerShotCompatibility: ["wide_room_hero", "high_angle_lifestyle"]
+    });
+  });
+
+  it.each([
+    {
+      label: "unknown archetype",
+      metadata: { runnerArchetype: "ballroom" },
+      error: /runnerArchetype/i
+    },
+    {
+      label: "unknown shot id",
+      metadata: { runnerShotCompatibility: ["studio_corner_detail"] },
+      error: /unsupported shot id/i
+    },
+    {
+      label: "duplicate shot id",
+      metadata: { runnerShotCompatibility: ["wide_room_hero", "wide_room_hero"] },
+      error: /must not contain duplicates/i
+    },
+    {
+      label: "compatibility without an archetype",
+      metadata: { runnerShotCompatibility: ["wide_room_hero"] },
+      error: /runnerArchetype is required/i
+    }
+  ])("rejects $label Runner metadata", async ({ metadata, error }) => {
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        id: "runner-invalid",
+        type: "architectural_living",
+        title: "Runner Invalid",
+        prompt: "Invalid Runner room prompt",
+        ...metadata
+      })}\n`
+    );
+
+    const library = await setBackgroundManifestPath({ productRoot, manifestPath });
+
+    expect(library.backgrounds).toEqual([]);
+    expect(library.errors[0]).toMatch(error);
+  });
+
+  it("changes the fingerprint when Runner compatibility metadata changes", async () => {
+    const entry = {
+      id: "runner-fingerprint",
+      type: "architectural_living",
+      title: "Runner Fingerprint",
+      prompt: "Clear circulation path",
+      runnerArchetype: "entry_foyer_lane"
+    };
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({ ...entry, runnerShotCompatibility: ["wide_room_hero"] })}\n`
+    );
+    const first = await setBackgroundManifestPath({ productRoot, manifestPath });
+
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({ ...entry, runnerShotCompatibility: ["high_angle_lifestyle"] })}\n`
+    );
+    const second = await scanBackgroundLibrary({ productRoot });
+
+    expect(second.backgrounds[0]?.fingerprint).not.toBe(first.backgrounds[0]?.fingerprint);
   });
 
   it("tracks newly added and used backgrounds independently from the manifest file", async () => {

@@ -16,14 +16,36 @@ export const AssetStatusSchema = z.enum(["done", "accepted", "rejected", "failed
 export const JobStatusSchema = z.enum(["queued", "generating", "succeeded", "failed", "cancelled"]);
 export const ProviderModeSchema = z.enum(["mock", "laozhang"]);
 export const ShapeVariantShapeSchema = z.enum(["runner", "round"]);
+export const RunnerRoomShotIdSchema = z.enum(["wide_room_hero", "high_angle_lifestyle"]);
+export const RunnerBackgroundArchetypeSchema = z.enum([
+  "long_hallway_gallery",
+  "entry_foyer_lane",
+  "open_living_circulation",
+  "bedside_passage",
+  "kitchen_galley_transition",
+  "stair_landing_corridor"
+]);
 export const ShapeVariantStrategySchema = z.enum(["auto", "repeat_border", "endcap", "stripe_band", "focal", "asymmetrical"]);
 export const RoundEdgePolicySchema = z.enum(["bound", "preserve_source", "radial_fringe"]);
+
+const ShotPromptOverrideSchema = z
+  .object({
+    scene: z.string().trim().min(1),
+    rug_placement: z.string().trim().min(1),
+    camera: z.string().trim().min(1),
+    lighting: z.string().trim().min(1).optional(),
+    styling: z.string().trim().min(1).optional(),
+    quality: z.string().trim().min(1).optional(),
+    output_requirements: z.string().trim().min(1).optional()
+  })
+  .strict();
 
 export const ShotSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9_]+$/),
     name: z.string().trim().min(1),
     prompt: z.string().trim().min(1),
+    backgroundTypeOverrides: z.record(z.string().regex(/^[a-z0-9_]+$/), ShotPromptOverrideSchema).optional(),
     defaultAspectRatio: AspectRatioSchema,
     defaultImageSize: ImageSizeSchema
   })
@@ -170,7 +192,9 @@ export const AssetRecordSchema = z
             type: z.string(),
             title: z.string(),
             prompt: z.string(),
-            previewImagePath: z.string().nullable()
+            previewImagePath: z.string().nullable(),
+            runnerArchetype: RunnerBackgroundArchetypeSchema.nullable().optional(),
+            runnerShotCompatibility: z.array(RunnerRoomShotIdSchema).optional()
           })
           .strict()
           .nullable()

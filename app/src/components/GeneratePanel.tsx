@@ -17,6 +17,9 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BACKGROUND_REQUIRED_SHOT_IDS, LABEL_REQUIRED_SHOT_IDS, RUG_CONSTRUCTION_OPTIONS } from "../../shared/constants";
+import { compatibleBackgroundsForShot, isBackgroundCompatibleForShot, isRunnerRoomShotId } from "../../shared/background-compatibility";
+import { normalizeBackgroundType, resolveShotBackgroundTypeOverride } from "../../shared/contextual-prompts";
+import { resolveShapeShotContext, shapeShotDisplayName } from "../../shared/shape-shot-prompts";
 import type {
   BackgroundLibraryState,
   BackgroundRecord,
@@ -119,12 +122,38 @@ export function GeneratePanel({
   const canGenerate = isProductGeneratable(product) && Boolean(productState) && shots.length > 0;
   const selectedShot = shots.find((shot) => shot.id === productState?.selectedShotId) ?? null;
   const selectedBackground = backgroundLibrary?.backgrounds.find((item) => item.id === productState?.selectedBackgroundId) ?? null;
+  const selectedShapeContext = product && selectedShot
+    ? resolveShapeShotContext({
+        shape: product.shape,
+        shot: selectedShot,
+        prompt: productState?.promptBox.value ?? "",
+        backgroundType: selectedBackground?.type
+      })
+    : null;
+  const selectedContextOverride = resolveShotBackgroundTypeOverride({
+    shot: selectedShot,
+    prompt: productState?.promptBox.value ?? "",
+    backgroundType: selectedBackground?.type
+  });
+  const selectedBackgroundType = selectedBackground ? normalizeBackgroundType(selectedBackground.type) : null;
+  const hasSelectedBackgroundOverride = Boolean(
+    selectedShot && selectedBackgroundType && selectedShot.backgroundTypeOverrides?.[selectedBackgroundType]
+  );
+  const backgroundContextNotice = selectedContextOverride
+    ? `${selectedContextOverride.backgroundType === "bedroom" ? "Bedroom" : selectedContextOverride.backgroundType} prompt active for this shot.`
+    : hasSelectedBackgroundOverride
+      ? "Custom prompt active; the automatic bedroom version will not overwrite your edits."
+      : null;
+  const shapeContextNotice = selectedShapeContext
+    ? `${selectedShapeContext.profile.label} mandatory shot profile active.${selectedBackgroundType && selectedShapeContext.backgroundCompatibility === "usable" ? ` ${selectedBackground?.type ?? selectedBackgroundType} is usable, but not a preferred background type for this shape.` : ""}${selectedShapeContext.customPromptActive ? " Your custom prompt is retained as secondary guidance; the shape contract still wins." : ""}`
+    : null;
+  const contextNotice = [backgroundContextNotice, shapeContextNotice].filter(Boolean).join(" ") || null;
   const selectedAggregate = selectedShot ? aggregates[selectedShot.id] ?? "empty" : "empty";
   const promptReady = Boolean(productState?.promptBox.value.trim());
   const selectedShotRunning = selectedShot ? runningShotIds.has(selectedShot.id) : false;
-  const selectedRequirement = shotRequirementBlocker(selectedShot, productState, backgroundLibrary);
+  const selectedRequirement = shotRequirementBlocker(selectedShot, product?.shape, productState, backgroundLibrary);
   const missingRequirement =
-    missingShots.map((shot) => shotRequirementBlocker(shot, productState, backgroundLibrary)).find(Boolean) ?? null;
+    missingShots.map((shot) => shotRequirementBlocker(shot, product?.shape, productState, backgroundLibrary)).find(Boolean) ?? null;
   const canGenerateSelected =
     !busyAction && canGenerate && Boolean(selectedShot) && promptReady && !selectedShotRunning && !selectedRequirement;
   const canGenerateMissing = !busyAction && canGenerate && missingCount > 0 && !missingRequirement;
@@ -214,6 +243,7 @@ export function GeneratePanel({
         <div className="composerStack">
           <CurrentShotCommandBar
             selectedShot={selectedShot}
+            selectedShotDisplayName={selectedShot && product ? shapeShotDisplayName(product.shape, selectedShot.name) : null}
             aggregate={selectedAggregate}
             settingsSummary={`${settings?.aspectRatio ?? "1:1"} / ${settings?.imageSize ?? "4K"} / batch x${batchSize}`}
             readinessText={readinessText}
@@ -224,9 +254,12 @@ export function GeneratePanel({
 
           <PromptSettings
             state={productState}
-            selectedShotName={selectedShot?.name ?? null}
+            selectedShotName={selectedShot && product ? shapeShotDisplayName(product.shape, selectedShot.name) : null}
             saving={savingState}
             title="Settings"
+            contextNotice={contextNotice}
+            shapeProfile={selectedShapeContext?.profile ?? null}
+            customPromptActive={selectedShapeContext?.customPromptActive ?? false}
             onPromptChange={onPromptChange}
             onSettingsChange={onSettingsChange}
             settingsExtra={
@@ -240,6 +273,7 @@ export function GeneratePanel({
 
           <BackgroundLibraryPanel
             product={product}
+            selectedShot={selectedShot}
             library={backgroundLibrary}
             selectedBackground={selectedBackground}
             selectedBackgroundId={productState?.selectedBackgroundId ?? null}
@@ -253,6 +287,7 @@ export function GeneratePanel({
           {shots.length > 0 ? (
             <ShotsPanel
               shots={shots}
+              productShape={product.shape}
               masterShots={masterShots}
               productState={productState}
               busyAction={busyAction}
@@ -265,6 +300,7 @@ export function GeneratePanel({
 
           <RequirementsPanel
             selectedShot={selectedShot}
+            productShape={product.shape}
             productState={productState}
             backgroundLibrary={backgroundLibrary}
             selectedBackground={selectedBackground}
@@ -285,6 +321,7 @@ export function GeneratePanel({
 
 function ShotsPanel({
   shots,
+  productShape,
   masterShots,
   productState,
   busyAction,
@@ -294,6 +331,7 @@ function ShotsPanel({
   onMasterShotsSave
 }: {
   shots: Shot[];
+  productShape: ProductSummary["shape"];
   masterShots: MasterShots | null;
   productState: ProductState | null;
   busyAction: string | null;
@@ -307,7 +345,11 @@ function ShotsPanel({
       <div className="sectionHeader">
         <div>
           <h3>Shots</h3>
-          <p>{pluralize(shots.length, "template")} ready for this product.</p>
+          <p>
+            {productShape === "area"
+              ? `${pluralize(shots.length, "template")} ready for this product.`
+              : `${pluralize(shots.length, `${productShape === "runner" ? "Runner" : "Round"}-tailored shot`)} ready.`}
+          </p>
         </div>
         {masterShots ? (
           <MasterShotEditor
@@ -323,6 +365,7 @@ function ShotsPanel({
           <ShotRow
             key={shot.id}
             shot={shot}
+            displayName={shapeShotDisplayName(productShape, shot.name)}
             index={index}
             requiresBackground={requiresBackground(shot.id)}
             requiresLabel={requiresLabel(shot.id)}
@@ -340,6 +383,7 @@ function ShotsPanel({
 
 function CurrentShotCommandBar({
   selectedShot,
+  selectedShotDisplayName,
   aggregate,
   settingsSummary,
   readinessText,
@@ -348,6 +392,7 @@ function CurrentShotCommandBar({
   onGenerate
 }: {
   selectedShot: Shot | null;
+  selectedShotDisplayName: string | null;
   aggregate: ShotAggregateState;
   settingsSummary: string;
   readinessText: string;
@@ -361,7 +406,7 @@ function CurrentShotCommandBar({
     <section className="currentShotCommandBar" aria-label="Current shot">
       <div className="currentShotIdentity">
         <span className="eyebrow">Current shot</span>
-        <strong>{selectedShot?.name ?? "Pick a shot below"}</strong>
+        <strong>{selectedShotDisplayName ?? selectedShot?.name ?? "Pick a shot below"}</strong>
       </div>
 
       <div className="currentShotSummary">
@@ -436,14 +481,32 @@ function hasBlankLabelWorkflow(shotId: string) {
   return shotId === "folded_label_detail";
 }
 
+function backgroundCompatibilityChoice(productShape: ProductSummary["shape"] | undefined) {
+  return productShape === "runner"
+    ? "choose a Runner Foyer/Hallway background"
+    : "choose a standard Area/Round room background";
+}
+
 function shotRequirementBlocker(
   shot: Shot | null,
+  productShape: ProductSummary["shape"] | undefined,
   state: ProductState | null,
   library: BackgroundLibraryState | null
 ) {
   if (!shot) return null;
   if (requiresBackground(shot.id) && !state?.selectedBackgroundId) {
     return `${shot.name} needs a selected background.`;
+  }
+  const selectedBackground = library?.backgrounds.find((background) => background.id === state?.selectedBackgroundId);
+  if (requiresBackground(shot.id) && state?.selectedBackgroundId && !selectedBackground) {
+    return `${shot.name} needs a selected background that still exists in the connected library.`;
+  }
+  if (
+    requiresBackground(shot.id) &&
+    productShape &&
+    !isBackgroundCompatibleForShot({ productShape, shotId: shot.id, background: selectedBackground })
+  ) {
+    return `${shot.name} needs you to ${backgroundCompatibilityChoice(productShape)}.`;
   }
   if (requiresLabel(shot.id) && !library?.labelLogoExists) {
     return `${shot.name} needs a configured label-logo image.`;
@@ -501,11 +564,13 @@ function InlineConstructionControl({
 
 function RequirementsPanel({
   selectedShot,
+  productShape,
   productState,
   backgroundLibrary,
   selectedBackground
 }: {
   selectedShot: Shot | null;
+  productShape: ProductSummary["shape"];
   productState: ProductState | null;
   backgroundLibrary: BackgroundLibraryState | null;
   selectedBackground: BackgroundRecord | null;
@@ -515,7 +580,10 @@ function RequirementsPanel({
   const backgroundNeeded = selectedShot ? requiresBackground(selectedShot.id) : false;
   const labelNeeded = selectedShot ? requiresLabel(selectedShot.id) : false;
   const blankLabelWorkflow = selectedShot ? hasBlankLabelWorkflow(selectedShot.id) : false;
-  const backgroundBlocked = backgroundNeeded && !selectedBackground;
+  const backgroundCompatible = selectedShot
+    ? isBackgroundCompatibleForShot({ productShape, shotId: selectedShot.id, background: selectedBackground })
+    : true;
+  const backgroundBlocked = backgroundNeeded && (!selectedBackground || !backgroundCompatible);
   const labelBlocked = labelNeeded && !backgroundLibrary?.labelLogoExists;
 
   return (
@@ -535,7 +603,9 @@ function RequirementsPanel({
             !selectedShot
               ? "No shot loaded."
               : backgroundBlocked
-                ? `${selectedShot.name} requires background.`
+                ? selectedBackground
+                  ? `${selectedBackground.title} is incompatible; ${backgroundCompatibilityChoice(productShape)}.`
+                  : `${selectedShot.name} requires background.`
                 : backgroundNeeded && selectedBackground
                   ? `${selectedBackground.title} / ${selectedBackground.status}`
                   : "Not required for this shot."
@@ -585,6 +655,7 @@ function RequirementRow({
 
 function BackgroundLibraryPanel({
   product,
+  selectedShot,
   library,
   selectedBackground,
   selectedBackgroundId,
@@ -595,6 +666,7 @@ function BackgroundLibraryPanel({
   onBackgroundChange
 }: {
   product: ProductSummary | null;
+  selectedShot: Shot | null;
   library: BackgroundLibraryState | null;
   selectedBackground: BackgroundRecord | null;
   selectedBackgroundId: string | null;
@@ -607,7 +679,9 @@ function BackgroundLibraryPanel({
   const [manifestDraft, setManifestDraft] = useState(library?.manifestPath ?? "");
   const [labelDraft, setLabelDraft] = useState(library?.labelLogoPath ?? "");
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [filter, setFilter] = useState<"all" | "new" | "used" | "living" | "bedroom">("all");
+  const [filter, setFilter] = useState<
+    "all" | "new" | "used" | "foyer" | "hallway" | "living" | "bedroom"
+  >("all");
   const [query, setQuery] = useState("");
   const [shuffledBackgroundIds, setShuffledBackgroundIds] = useState<string[] | null>(null);
   const [visibleBackgroundCount, setVisibleBackgroundCount] = useState(BACKGROUND_PAGE_SIZE);
@@ -622,7 +696,23 @@ function BackgroundLibraryPanel({
     setVisibleBackgroundCount(BACKGROUND_PAGE_SIZE);
   }, [filter, pickerOpen, query, shuffledBackgroundIds]);
 
-  const backgrounds = library?.backgrounds ?? [];
+  const allBackgrounds = library?.backgrounds ?? [];
+  const backgrounds = useMemo(
+    () => compatibleBackgroundsForShot({
+      productShape: product?.shape ?? "area",
+      shotId: selectedShot?.id,
+      backgrounds: allBackgrounds
+    }),
+    [allBackgrounds, product?.shape, selectedShot?.id]
+  );
+  const runnerShotScope = Boolean(product?.shape === "runner" && selectedShot && isRunnerRoomShotId(selectedShot.id));
+  const selectedBackgroundCompatible = selectedShot
+    ? isBackgroundCompatibleForShot({
+        productShape: product?.shape ?? "area",
+        shotId: selectedShot.id,
+        background: selectedBackground
+      })
+    : true;
   const orderedBackgrounds = useMemo(() => {
     if (!shuffledBackgroundIds) return backgrounds;
     const byId = new Map(backgrounds.map((background) => [background.id, background]));
@@ -641,6 +731,8 @@ function BackgroundLibraryPanel({
       const matchesFilter =
         filter === "all" ||
         background.status === filter ||
+        (filter === "foyer" && type.includes("foyer")) ||
+        (filter === "hallway" && (type.includes("hallway") || type.includes("corridor"))) ||
         (filter === "living" && type.includes("living")) ||
         (filter === "bedroom" && type.includes("bed"));
       const matchesQuery =
@@ -663,7 +755,13 @@ function BackgroundLibraryPanel({
       <div className="sectionHeader compactReferenceHeader">
         <div>
           <h3>Background</h3>
-          <p>{library?.manifestPath ? `${backgrounds.length} backgrounds available` : "No manifest connected"}</p>
+          <p>
+            {library?.manifestPath
+              ? runnerShotScope
+                ? `${backgrounds.length} Runner room backgrounds`
+                : `${backgrounds.length} backgrounds available`
+              : "No manifest connected"}
+          </p>
         </div>
       </div>
 
@@ -684,7 +782,7 @@ function BackgroundLibraryPanel({
           <strong>{selectedBackground?.title ?? "None selected"}</strong>
           <p>
             {selectedBackground
-              ? `${selectedBackground.type} - ${backgroundStatusLabel(selectedBackground.status)}`
+              ? `${selectedBackground.type} - ${backgroundStatusLabel(selectedBackground.status)}${selectedBackgroundCompatible ? "" : ` - ${backgroundCompatibilityChoice(product?.shape)}`}`
               : product
                 ? "Required before generating the two interior shots."
                 : "Select a product first."}
@@ -709,7 +807,7 @@ function BackgroundLibraryPanel({
           <button
             className="controlButton"
             type="button"
-            disabled={disabled || backgrounds.length === 0 || !product}
+            disabled={disabled || !product}
             onClick={() => {
               setShuffledBackgroundIds(null);
               setPickerOpen(true);
@@ -812,7 +910,7 @@ function BackgroundLibraryPanel({
             </div>
 
             <div className="backgroundFilters">
-              {(["all", "new", "used", "living", "bedroom"] as const).map((item) => (
+              {(["all", "new", "used", "foyer", "hallway", "living", "bedroom"] as const).map((item) => (
                 <button
                   key={item}
                   type="button"
@@ -855,7 +953,7 @@ function BackgroundLibraryPanel({
                   </div>
                   <div className="backgroundMetaOverlay">
                     <strong>{background.title}</strong>
-                    <span>{background.type}</span>
+                    <span>{background.runnerArchetype ?? background.type}</span>
                     <span className={`statusPill status-${background.status}`}>
                       {backgroundStatusLabel(background.status)}
                     </span>
@@ -863,7 +961,11 @@ function BackgroundLibraryPanel({
                 </button>
               ))}
               {visibleBackgrounds.length === 0 ? (
-                <div className="backgroundEmptyState">No backgrounds match this filter.</div>
+                <div className="backgroundEmptyState">
+                  {runnerShotScope && backgrounds.length === 0
+                    ? "No Runner Foyer or Hallway backgrounds are connected."
+                    : "No backgrounds match this filter."}
+                </div>
               ) : null}
               {remainingBackgroundCount > 0 ? (
                 <button
@@ -950,6 +1052,7 @@ function ReferenceSelector({
 
 interface ShotRowProps {
   shot: Shot;
+  displayName: string;
   index: number;
   requiresBackground: boolean;
   requiresLabel: boolean;
@@ -962,6 +1065,7 @@ interface ShotRowProps {
 
 function ShotRow({
   shot,
+  displayName,
   index,
   requiresBackground,
   requiresLabel,
@@ -981,12 +1085,12 @@ function ShotRow({
         className="shotLoadSurface"
         type="button"
         disabled={disabled}
-        aria-label={selected ? `${shot.name} prompt loaded` : `Load ${shot.name} prompt`}
+        aria-label={selected ? `${displayName} prompt loaded` : `Load ${displayName} prompt`}
         aria-pressed={selected}
         onClick={() => onLoadShot(shot)}
       >
         <span className="shotIndex">{String(index + 1).padStart(2, "0")}</span>
-        <strong className="shotName">{shot.name}</strong>
+        <strong className="shotName">{displayName}</strong>
         <span className="shotRequirementIcons" aria-label="Shot requirements">
           {requiresBackground ? <span className="requirementPill">BG</span> : null}
           {requiresLabel || hasLabelWorkflow ? <span className="requirementPill">Label</span> : null}

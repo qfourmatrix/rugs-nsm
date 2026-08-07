@@ -10,6 +10,8 @@ app/output/
 .env.*.local
 coverage/
 *.log
+__pycache__/
+*.pyc
 
 # The complete working library is copied during the initial Mac handoff, but it
 # is never published to or pulled from GitHub. This keeps public code updates

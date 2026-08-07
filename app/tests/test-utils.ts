@@ -111,6 +111,7 @@ export function makeShot(overrides: Partial<Shot> = {}): Shot {
     id,
     name: overrides.name ?? id.replaceAll("_", " "),
     prompt,
+    backgroundTypeOverrides: overrides.backgroundTypeOverrides,
     defaultAspectRatio: overrides.defaultAspectRatio ?? "1:1",
     defaultImageSize: overrides.defaultImageSize ?? "4K"
   };

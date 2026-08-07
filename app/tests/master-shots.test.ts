@@ -66,6 +66,39 @@ describe("master shots validation", () => {
     }
   });
 
+  it("provides validated bedroom overrides for the two lifestyle shots", async () => {
+    const master = await loadMasterShots({ productRoot });
+    const wide = master.shots.find((shot) => shot.id === "wide_room_hero");
+    const highAngle = master.shots.find((shot) => shot.id === "high_angle_lifestyle");
+
+    expect(wide?.backgroundTypeOverrides?.bedroom?.scene).toMatch(/Bedroom-specific wide lifestyle hero/i);
+    expect(highAngle?.backgroundTypeOverrides?.bedroom?.scene).toMatch(/Bedroom-specific high-angle/i);
+    expect(wide?.backgroundTypeOverrides?.bedroom?.rug_placement).toMatch(/bed/i);
+    expect(highAngle?.backgroundTypeOverrides?.bedroom?.camera).toMatch(/50-65 degrees/i);
+  });
+
+  it("rejects unsafe fields in a background-specific prompt override", async () => {
+    const shot = makeShot({
+      backgroundTypeOverrides: {
+        bedroom: {
+          scene: "Bedroom scene.",
+          rug_placement: "Place beneath the bed.",
+          camera: "Camera at the foot of the bed.",
+          forbidden_changes: []
+        } as never
+      }
+    });
+
+    await expectValidationFailure(
+      {
+        version: 1,
+        updatedAt: "2026-07-21T00:00:00.000Z",
+        shots: [shot]
+      },
+      /Unrecognized key|backgroundTypeOverrides/i
+    );
+  });
+
   it("prevents detail shots from miniaturizing the full rug design into tight crops", async () => {
     const master = await loadMasterShots({ productRoot });
     const detailShotIds = ["studio_corner_detail", "texture_macro", "folded_label_detail"];
