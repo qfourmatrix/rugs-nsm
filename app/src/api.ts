@@ -17,7 +17,11 @@ import type {
   ShapeVariantRecord,
   ShapeVariantShape,
   ShapeVariantStatus,
-  ShapeVariantStrategy
+  ShapeVariantStrategy,
+  GallerySelection,
+  GalleryPreflight,
+  GalleryExportJob,
+  GalleryExportReceipt
 } from "../shared/types";
 
 export interface ShapeVariantsOverview {
@@ -256,6 +260,49 @@ export async function getGenerated(productId: string): Promise<GeneratedResponse
     trash: generated?.trash ?? [],
     aggregates: generated?.aggregates ?? {}
   };
+}
+
+export async function getGallerySelection(productId: string): Promise<GallerySelection> {
+  const data = await request<unknown>(productPath(productId, "/gallery"));
+  return unwrap<GallerySelection>(data, ["gallery"]);
+}
+
+export async function updateGallerySelection(productId: string, assetIds: string[]): Promise<GallerySelection> {
+  const data = await request<unknown>(productPath(productId, "/gallery"), {
+    method: "PUT",
+    body: JSON.stringify({ assetIds })
+  });
+  return unwrap<GallerySelection>(data, ["gallery"]);
+}
+
+export async function preflightGalleryExport(productIds: string[]): Promise<GalleryPreflight> {
+  const data = await request<unknown>("/api/gallery-exports/preflight", {
+    method: "POST",
+    body: JSON.stringify({ productIds })
+  });
+  return unwrap<GalleryPreflight>(data, ["preflight"]);
+}
+
+export async function startGalleryExport(productIds: string[]): Promise<GalleryExportJob> {
+  const data = await request<unknown>("/api/gallery-exports", {
+    method: "POST",
+    body: JSON.stringify({ productIds })
+  });
+  return unwrap<GalleryExportJob>(data, ["exportJob"]);
+}
+
+export async function getGalleryExportJob(exportId: string): Promise<GalleryExportJob> {
+  const data = await request<unknown>(`/api/gallery-exports/${encodeURIComponent(exportId)}`);
+  return unwrap<GalleryExportJob>(data, ["exportJob"]);
+}
+
+export async function getGalleryExportReceipts(): Promise<GalleryExportReceipt[]> {
+  const data = await request<unknown>("/api/gallery-export-receipts");
+  return unwrap<GalleryExportReceipt[]>(data, ["receipts"]);
+}
+
+export function galleryExportDownloadUrl(exportId: string) {
+  return `/api/gallery-exports/${encodeURIComponent(exportId)}/download`;
 }
 
 export async function uploadRefineReference(

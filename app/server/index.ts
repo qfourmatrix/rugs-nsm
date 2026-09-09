@@ -24,6 +24,8 @@ import { resolveShotBackgroundTypeOverride } from "../shared/contextual-prompts"
 import { resolveShapeShotContext } from "../shared/shape-shot-prompts";
 import {
   BulkGenerateRequestSchema,
+  GalleryExportSelectionSchema,
+  GallerySelectionUpdateSchema,
   GenerateRequestSchema,
   RefineRequestSchema,
   ShapeVariantApproveRequestSchema,
@@ -48,7 +50,7 @@ import {
   setLabelLogoPath,
   toClientBackgroundLibraryState
 } from "./background-library";
-import { buildAssetBasename, getAssetRecord, listGeneratedAssets, rejectAsset, saveAsset, writeOutputImage } from "./asset-store";
+import { acceptAsset, buildAssetBasename, getAssetRecord, listGeneratedAssets, rejectAsset, saveAsset, writeOutputImage } from "./asset-store";
 import { config, clampQueueConcurrency } from "./config";
 import { asyncRoute, conflictError, errorMiddleware, notFoundError, validationError } from "./errors";
 import { ensureDir, imageMimeType, pathExists, safeChildPath, sha256File, SUPPORTED_IMAGE_EXTENSIONS } from "./fsUtils";
@@ -69,6 +71,18 @@ import {
 } from "./refine-artifacts";
 import { redactSecrets } from "./security";
 import { hideShapeVariantGenerated } from "./shape-variant-artifacts";
+import {
+  cleanupGalleryExportJobs,
+  GalleryExportRegistry,
+  listGalleryExportReceipts,
+  preflightGalleryExport
+} from "./gallery-export";
+import {
+  appendAcceptedGalleryAsset,
+  loadGallerySelection,
+  removeGalleryAsset,
+  saveGallerySelection
+} from "./gallery-store";
 import { materializeShapeVariant } from "./shape-variant-materialize";
 import {
   getShapeVariantRecord,
@@ -92,6 +106,7 @@ const jobs = new JobRegistry((records) => {
     console.error("Failed to persist job log", error);
   });
 });
+const galleryExports = new GalleryExportRegistry(config.productRoot);
 const pending: Array<QueuedGeneration> = [];
 const activeAbortControllers = new Map<string, AbortController>();
 let activeCount = 0;
@@ -1481,6 +1496,84 @@ app.put(
 );
 
 app.get(
+  "/api/products/:productId/gallery",
+  asyncRoute(async (req, res) => {
+    const productId = req.params.productId as string;
+    await assertKnownProduct(productId);
+    res.json({ gallery: await loadGallerySelection({ productRoot: config.productRoot, productId }) });
+  })
+);
+
+app.put(
+  "/api/products/:productId/gallery",
+  asyncRoute(async (req, res) => {
+    const productId = req.params.productId as string;
+    await assertKnownProduct(productId);
+    const parsed = GallerySelectionUpdateSchema.parse(req.body ?? {});
+    res.json({
+      gallery: await saveGallerySelection({
+        productRoot: config.productRoot,
+        productId,
+        assetIds: parsed.assetIds
+      })
+    });
+  })
+);
+
+app.post(
+  "/api/gallery-exports/preflight",
+  asyncRoute(async (req, res) => {
+    const parsed = GalleryExportSelectionSchema.parse(req.body ?? {});
+    res.json({ preflight: await preflightGalleryExport({ productRoot: config.productRoot, productIds: parsed.productIds }) });
+  })
+);
+
+app.post(
+  "/api/gallery-exports",
+  asyncRoute(async (req, res) => {
+    const parsed = GalleryExportSelectionSchema.parse(req.body ?? {});
+    if (new Set(parsed.productIds).size !== parsed.productIds.length) {
+      throw validationError("DUPLICATE_PRODUCT_SELECTION", "Each product shape can be selected only once.");
+    }
+    const knownIds = new Set((await productsWithCounts()).map((product) => product.id));
+    const unknownId = parsed.productIds.find((productId) => !knownIds.has(productId));
+    if (unknownId) throw notFoundError("UNKNOWN_PRODUCT", `Unknown product: ${unknownId}`);
+    res.status(202).json({ exportJob: galleryExports.start(parsed.productIds) });
+  })
+);
+
+app.get(
+  "/api/gallery-exports/:exportId",
+  asyncRoute(async (req, res) => {
+    res.json({ exportJob: galleryExports.get(req.params.exportId as string) });
+  })
+);
+
+app.get(
+  "/api/gallery-exports/:exportId/download",
+  asyncRoute(async (req, res, next) => {
+    const exportId = req.params.exportId as string;
+    const download = galleryExports.download(exportId);
+    res.download(download.archivePath, download.archiveFilename, { dotfiles: "allow" }, (error) => {
+      if (error) {
+        if (!res.headersSent) next(error);
+        return;
+      }
+      void galleryExports.markDownloaded(exportId).catch((cleanupError) => {
+        console.error("Failed to clean up downloaded gallery export", cleanupError);
+      });
+    });
+  })
+);
+
+app.get(
+  "/api/gallery-export-receipts",
+  asyncRoute(async (_req, res) => {
+    res.json({ receipts: await listGalleryExportReceipts(config.productRoot) });
+  })
+);
+
+app.get(
   "/api/products/:productId/state",
   asyncRoute(async (req, res) => {
     const productId = req.params.productId as string;
@@ -1873,8 +1966,10 @@ app.post(
   asyncRoute(async (req, res) => {
     const productId = req.params.productId as string;
     const assetId = req.params.assetId as string;
-    const { acceptAsset } = await import("./asset-store");
-    res.json({ asset: await acceptAsset({ productRoot: config.productRoot, productId, assetId }) });
+    await assertKnownProduct(productId);
+    const asset = await acceptAsset({ productRoot: config.productRoot, productId, assetId });
+    const gallery = await appendAcceptedGalleryAsset({ productRoot: config.productRoot, productId, asset });
+    res.json({ asset, gallery });
   })
 );
 
@@ -1883,8 +1978,10 @@ app.post(
   asyncRoute(async (req, res) => {
     const productId = req.params.productId as string;
     const assetId = req.params.assetId as string;
-    const { rejectAsset } = await import("./asset-store");
-    res.json({ asset: await rejectAsset({ productRoot: config.productRoot, productId, assetId }) });
+    await assertKnownProduct(productId);
+    const asset = await rejectAsset({ productRoot: config.productRoot, productId, assetId });
+    const gallery = await removeGalleryAsset({ productRoot: config.productRoot, productId, assetId });
+    res.json({ asset, gallery });
   })
 );
 
@@ -1966,6 +2063,7 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => {
 app.use(errorMiddleware);
 
 await ensureDir(config.productRoot);
+await cleanupGalleryExportJobs(config.productRoot);
 await loadMasterShots({ productRoot: config.productRoot });
 await loadRefineSettings({ productRoot: config.productRoot });
 const persistedJobs = await loadPersistedJobs(config.productRoot);

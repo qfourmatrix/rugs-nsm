@@ -38,6 +38,7 @@ import {
   validateRefineVariation
 } from "./api";
 import { LeftPanel } from "./components/LeftPanel";
+import { GalleryExportWorkspace } from "./components/GalleryExportWorkspace";
 import { ProductTabs } from "./components/ProductTabs";
 import { RefineStep } from "./components/RefineStep";
 import { RightPanel } from "./components/RightPanel";
@@ -105,6 +106,7 @@ export function App() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [galleryExportOpen, setGalleryExportOpen] = useState(false);
   const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
     const stored = window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY);
     const parsed = stored ? Number.parseInt(stored, 10) : DEFAULT_LEFT_PANEL_WIDTH;
@@ -1017,6 +1019,7 @@ export function App() {
           onSelectProduct={handleSelectProduct}
           onRescan={handleRescan}
           onCreateProduct={() => setCreateModalOpen(true)}
+          onOpenGalleryExport={() => setGalleryExportOpen(true)}
         />
         <ShapeVariantStudio
           products={products}
@@ -1155,6 +1158,14 @@ export function App() {
             setCreateModalOpen(false);
             void handleCreateProduct(name);
           }}
+        />
+      ) : null}
+      {galleryExportOpen ? (
+        <GalleryExportWorkspace
+          products={products}
+          currentProduct={selectedProduct}
+          masterShots={masterShots}
+          onClose={() => setGalleryExportOpen(false)}
         />
       ) : null}
     </div>

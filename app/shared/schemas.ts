@@ -386,3 +386,11 @@ export const ShapeVariantShotsBatchRequestSchema = z.object({
   productIds: z.array(z.string().min(1)).min(1).max(100),
   imageSize: z.enum(["2K", "4K"]).default("4K")
 }).strict();
+
+export const GallerySelectionUpdateSchema = z.object({
+  assetIds: z.array(z.string().trim().min(1).max(240)).max(100)
+}).strict();
+
+export const GalleryExportSelectionSchema = z.object({
+  productIds: z.array(z.string().trim().min(1).max(240)).min(1).max(100)
+}).strict();

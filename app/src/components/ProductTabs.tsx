@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Package,
+  PackageCheck,
   Plus,
   RefreshCw,
   Search,
@@ -30,6 +31,7 @@ interface ProductTabsProps {
   onSelectProduct: (productId: string) => void;
   onRescan: () => void;
   onCreateProduct: () => void;
+  onOpenGalleryExport: () => void;
 }
 
 type ProductFilter = "all" | "needs_attention" | "in_progress" | "complete";
@@ -56,7 +58,8 @@ export function ProductTabs({
   onSearchChange,
   onSelectProduct,
   onRescan,
-  onCreateProduct
+  onCreateProduct,
+  onOpenGalleryExport
 }: ProductTabsProps) {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [filter, setFilter] = useState<ProductFilter>("all");
@@ -229,6 +232,10 @@ export function ProductTabs({
         </div>
 
         <div className="topbarTools">
+          <button className="galleryExportTopbarButton" type="button" onClick={onOpenGalleryExport} disabled={products.length === 0 || loading}>
+            <PackageCheck size={15} aria-hidden="true" />
+            <span>Export galleries</span>
+          </button>
           <div className={`queueSummary ${runningCount > 0 ? "isActive" : ""}`} aria-live="polite">
             {runningCount > 0 ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null}
             <span>{runningCount > 0 ? `${runningCount} running` : "Queue idle"}</span>
