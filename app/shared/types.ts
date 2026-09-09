@@ -290,6 +290,121 @@ export interface GeneratedResponse {
   aggregates: Record<string, ShotAggregateState>;
 }
 
+export interface GallerySelection {
+  version: 1;
+  productId: string;
+  assetIds: string[];
+  initializedAt: string;
+  updatedAt: string;
+}
+
+export type GalleryIssueSeverity = "warning" | "blocker";
+
+export interface GalleryPreflightIssue {
+  code: string;
+  severity: GalleryIssueSeverity;
+  message: string;
+  productId: string;
+  familyId: string;
+  shape: ProductShape;
+  assetId?: string;
+}
+
+export interface GalleryPreflightShape {
+  productId: string;
+  familyId: string;
+  shape: ProductShape;
+  status: "ready" | "skipped";
+  itemCount: number;
+  issues: GalleryPreflightIssue[];
+}
+
+export interface GalleryPreflight {
+  version: 1;
+  checkedAt: string;
+  productIds: string[];
+  shapes: GalleryPreflightShape[];
+  readyCount: number;
+  skippedCount: number;
+}
+
+export interface ExportImageDimensions {
+  width: number;
+  height: number;
+}
+
+export interface GalleryExportImageReceipt {
+  position: number;
+  role: "main" | "generated";
+  assetId: string | null;
+  shotId: string;
+  shotName: string;
+  sourceFile: string;
+  originalFilename: string;
+  shopifyFilename: string;
+  sourceDimensions: ExportImageDimensions;
+  outputDimensions: ExportImageDimensions;
+  sourceBytes: number;
+  outputBytes: number;
+  sourceSha256: string;
+  outputSha256: string;
+}
+
+export interface GalleryExportShapeReceipt {
+  productId: string;
+  familyId: string;
+  shape: ProductShape;
+  status: "included" | "skipped";
+  issues: GalleryPreflightIssue[];
+  images: GalleryExportImageReceipt[];
+}
+
+export interface GalleryExportEncoderSettings {
+  format: "webp";
+  preset: "photo";
+  quality: 90;
+  effort: 6;
+  smartSubsample: true;
+  colourSpace: "srgb";
+  maximumDimension: 4096;
+  maximumBytes: 20971520;
+  withoutEnlargement: true;
+  metadata: "stripped";
+}
+
+export interface GalleryExportReceipt {
+  version: 1;
+  exportId: string;
+  archiveFilename: string;
+  createdAt: string;
+  completedAt: string;
+  downloadedAt: string | null;
+  requestedProductIds: string[];
+  encoder: GalleryExportEncoderSettings;
+  shapes: GalleryExportShapeReceipt[];
+  includedShapes: number;
+  skippedShapes: number;
+  archiveBytes: number;
+  archiveSha256: string;
+}
+
+export type GalleryExportJobStatus = "queued" | "building" | "ready" | "failed" | "downloaded";
+
+export interface GalleryExportJob {
+  exportId: string;
+  status: GalleryExportJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  archiveFilename: string | null;
+  progress: {
+    completed: number;
+    total: number;
+    message: string;
+  };
+  error: string | null;
+  receipt: GalleryExportReceipt | null;
+}
+
 export interface JobRecord {
   jobId: string;
   runId: string;
