@@ -1,0 +1,46 @@
+.familyShapeStatus { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.familyShapeStatusSlot { display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; flex: 0 0 16px; }
+.familyShapeGlyph { display: block; width: 16px; height: 16px; flex: none; border: 0; border-radius: 0; }
+.familyShapeGlyph.shape-runner { width: 8px; }
+.familyShapeGlyph.shape-round { border-radius: 50%; }
+.familyShapeGlyph.export-ready { background: #16A34A; }
+.familyShapeGlyph.export-not-ready { background: #EAB308; }
+.familyShapeGlyph.export-missing { background: #9CA3AF; }
+.familyShapeStatusError { width: 16px; font-weight: 700; text-align: center; }
+.productTabsRail .productRailTab { grid-template-columns: 34px minmax(0, 1fr) 10px; min-height: 48px; height: 48px; gap: 8px; padding: 6px 10px 6px 6px; }
+.productRailTab > .familyShapeStatus { flex-direction: column; justify-self: end; gap: 3px; }
+.productRailTab .familyShapeStatusSlot { width: 10px; height: 10px; flex-basis: 10px; }
+.productRailTab .familyShapeGlyph { width: 10px; height: 10px; }
+.productRailTab .familyShapeGlyph.shape-runner { width: 5px; }
+.productRailTab .familyShapeStatusError { width: 10px; height: 10px; font-size: 10px; line-height: 10px; }
+.studioReviewToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 6px 12px 0; }
+.studioReviewToolbar .modeSwitch { margin: 0; }
+.exportReadinessControl { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; flex-wrap: wrap; }
+.exportReadinessControl > span { color: var(--muted, #626a78); }
+.exportReadinessLabel { font-weight: 600; }
+.exportReadinessSegments { display: inline-flex; align-items: center; gap: 2px; height: 32px; padding: 3px; border: 1px solid #e0e4ea; border-radius: var(--radius, 8px); background: #eef0f4; }
+.exportReadinessControl button { height: 24px; min-width: 60px; padding: 0 9px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted, #626a78); font: inherit; font-weight: 650; cursor: pointer; }
+.exportReadinessControl button:hover:not(:disabled):not(.isActive) { background: #e3e7ed; color: var(--text, #242933); }
+.exportReadinessControl button.isActive { background: #e7f5eb; border-color: #badcc5; color: #165b32; }
+.exportReadinessControl button.isActive:first-of-type { background: #fff6cb; border-color: #ead791; color: #665000; }
+.acceptAllDone { min-height: 30px; border: 1px solid var(--border, #d9d5e5); border-radius: 6px; background: var(--surface, #fffef7); padding: 5px 9px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.acceptAllDone { display: inline-flex; align-items: center; gap: 5px; }
+.acceptAllDone:disabled, .exportReadinessControl button:disabled { opacity: .55; cursor: default; }
+.studioReviewNotice { margin: 0 0 10px; font-size: 12px; color: var(--text-muted, #5b5b73); }
+.attemptCard { position: relative; }
+.attemptQuickAccept { position: absolute; z-index: 1; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 5px 7px; border: 1px solid #b7cfbf; border-radius: 6px; background: #fffef7; color: #165b32; font: inherit; font-size: 11px; font-weight: 600; }
+button.attemptQuickAccept { cursor: pointer; }
+button.attemptQuickAccept:disabled { opacity: .6; cursor: default; }
+.attemptQuickAccept.isAccepted { background: #e7f5eb; }
+.attemptQuickAccept:focus-visible, .acceptAllDone:focus-visible, .exportReadinessControl button:focus-visible { outline: 2px solid #0866e8; outline-offset: 3px; }
+.leftPanel .leftPanelTools { flex-wrap: wrap; }
+.leftPanel .attemptsPanel > .panelHeader { flex-wrap: wrap; }
+@media (pointer: coarse) {
+  .attemptQuickAccept, .acceptAllDone, .exportReadinessControl button { min-height: 44px; }
+  .exportReadinessSegments { height: auto; }
+}
+@media (max-width: 700px) {
+  .shapeFamilyBar { grid-template-columns: minmax(0, 1fr); }
+  .shapeSwitch { min-width: 0; }
+  .shapeCampaignButton { justify-self: start; max-width: 100%; }
+}

@@ -145,4 +145,41 @@ describe("curated Shopify gallery exports", () => {
     });
     await expect(preflightGalleryExport({ productRoot, productIds: ["../escape"] })).rejects.toMatchObject({ code: "UNKNOWN_PRODUCT" });
   });
+
+  it("exports a base-only gallery despite unrelated corrupt generations, without upscaling", async () => {
+    const { productDir, base } = await makeSquareProduct("base-only", 80);
+    await fs.mkdir(path.join(productDir, "generated"), { recursive: true });
+    await fs.writeFile(path.join(productDir, "generated", "corrupt.json"), "broken unrelated metadata");
+    const preflight = await preflightGalleryExport({ productRoot, productIds: ["base-only"] });
+    expect(preflight.readyCount).toBe(1);
+    expect(preflight.shapes[0].itemCount).toBe(1);
+    expect(preflight.shapes[0].issues.some((issue) => issue.severity === "blocker")).toBe(false);
+    const result = await buildGalleryExport({ productRoot, productIds: ["base-only"], exportId: "export_base_only", expectedFingerprints: { "base-only": preflight.shapes[0].contentFingerprint! } });
+    expect(result.receipt.shapes[0].images).toHaveLength(1);
+    expect(result.receipt.shapes[0].images[0]).toMatchObject({ position: 1, role: "main", outputDimensions: { width: 80, height: 80 } });
+    const { stdout: original } = await execFileAsync("unzip", ["-p", result.archivePath, "base-only/area/originals/base.png"], { encoding: "buffer" });
+    expect(original).toEqual(base);
+  }, 30_000);
+
+  it("blocks only a shape whose content changes after successful preflight", async () => {
+    const { productDir } = await makeSquareProduct("changed", 80);
+    await makeSquareProduct("unchanged", 80);
+    const preflight = await preflightGalleryExport({ productRoot, productIds: ["changed", "unchanged"] });
+    await sharp({ create: { width: 80, height: 80, channels: 3, background: "#900" } }).png().toFile(path.join(productDir, "base.png"));
+    const result = await buildGalleryExport({ productRoot, productIds: ["changed", "unchanged"], exportId: "export_changed", expectedFingerprints: Object.fromEntries(preflight.shapes.map((shape) => [shape.productId, shape.contentFingerprint!])) });
+    expect(result.receipt.includedShapes).toBe(1);
+    expect(result.receipt.shapes.find((shape) => shape.productId === "changed")).toMatchObject({ status: "skipped", issues: expect.arrayContaining([expect.objectContaining({ code: "CONTENT_CHANGED" })]) });
+  }, 30_000);
+
+  it("validates only selected metadata and still blocks unaccepted or construction selections", async () => {
+    const { productDir } = await makeSquareProduct("selected-only", 80);
+    const asset = await addAccepted("selected-only", "selected");
+    await saveGallerySelection({ productRoot, productId: "selected-only", assetIds: [asset.assetId] });
+    await fs.writeFile(path.join(productDir, "generated", "unrelated.json"), "broken metadata");
+    expect((await preflightGalleryExport({ productRoot, productIds: ["selected-only"] })).readyCount).toBe(1);
+    await fs.writeFile(path.join(productDir, "generated", "selected.json"), JSON.stringify({ ...asset, status: "done" }));
+    expect((await preflightGalleryExport({ productRoot, productIds: ["selected-only"] })).shapes[0].issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "UNACCEPTED_GALLERY_ASSET" })]));
+    await fs.writeFile(path.join(productDir, "generated", "selected.json"), JSON.stringify({ ...asset, shotId: "refine_base" }));
+    expect((await preflightGalleryExport({ productRoot, productIds: ["selected-only"] })).shapes[0].issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "UTILITY_GALLERY_ASSET" })]));
+  }, 30_000);
 });

@@ -26,6 +26,8 @@ import {
   BulkGenerateRequestSchema,
   GalleryExportSelectionSchema,
   GallerySelectionUpdateSchema,
+  GalleryReadinessUpdateSchema,
+  GalleryBulkAcceptSchema,
   GenerateRequestSchema,
   RefineRequestSchema,
   ShapeVariantApproveRequestSchema,
@@ -78,9 +80,12 @@ import {
   preflightGalleryExport
 } from "./gallery-export";
 import {
-  appendAcceptedGalleryAsset,
+  acceptGalleryAsset,
+  acceptGalleryAssets,
+  galleryReadinessSummary,
   loadGallerySelection,
-  removeGalleryAsset,
+  rejectGalleryAsset,
+  setGalleryReadiness,
   saveGallerySelection
 } from "./gallery-store";
 import { materializeShapeVariant } from "./shape-variant-materialize";
@@ -366,6 +371,7 @@ async function productsWithCounts(): Promise<ProductSummary[]> {
       const aggregateValues = masterShots.shots.map((shot) => generated.aggregates[shot.id] ?? "empty");
       return {
         ...product,
+        ...await galleryReadinessSummary({ productRoot: config.productRoot, productId: product.id }),
         createdAt,
         counts: {
           totalShots: masterShots.shots.length,
@@ -1514,9 +1520,31 @@ app.put(
       gallery: await saveGallerySelection({
         productRoot: config.productRoot,
         productId,
-        assetIds: parsed.assetIds
+        assetIds: parsed.assetIds,
+        expectedRevision: parsed.expectedRevision
       })
     });
+  })
+);
+
+app.patch(
+  "/api/products/:productId/gallery/readiness",
+  asyncRoute(async (req, res) => {
+    const productId = req.params.productId as string;
+    const parsed = GalleryReadinessUpdateSchema.parse(req.body ?? {});
+    if (parsed.exportReady) await assertReadyProduct(productId);
+    else await assertKnownProduct(productId);
+    res.json({ gallery: await setGalleryReadiness({ productRoot: config.productRoot, productId, ...parsed }) });
+  })
+);
+
+app.post(
+  "/api/products/:productId/generated/accept-all",
+  asyncRoute(async (req, res) => {
+    const productId = req.params.productId as string;
+    await assertKnownProduct(productId);
+    const parsed = GalleryBulkAcceptSchema.parse(req.body ?? {});
+    res.json(await acceptGalleryAssets({ productRoot: config.productRoot, productId, assetIds: parsed.assetIds }));
   })
 );
 
@@ -1538,7 +1566,7 @@ app.post(
     const knownIds = new Set((await productsWithCounts()).map((product) => product.id));
     const unknownId = parsed.productIds.find((productId) => !knownIds.has(productId));
     if (unknownId) throw notFoundError("UNKNOWN_PRODUCT", `Unknown product: ${unknownId}`);
-    res.status(202).json({ exportJob: galleryExports.start(parsed.productIds) });
+    res.status(202).json({ exportJob: galleryExports.start(parsed.productIds, parsed.expectedFingerprints) });
   })
 );
 
@@ -1967,9 +1995,7 @@ app.post(
     const productId = req.params.productId as string;
     const assetId = req.params.assetId as string;
     await assertKnownProduct(productId);
-    const asset = await acceptAsset({ productRoot: config.productRoot, productId, assetId });
-    const gallery = await appendAcceptedGalleryAsset({ productRoot: config.productRoot, productId, asset });
-    res.json({ asset, gallery });
+    res.json(await acceptGalleryAsset({ productRoot: config.productRoot, productId, assetId }));
   })
 );
 
@@ -1979,9 +2005,7 @@ app.post(
     const productId = req.params.productId as string;
     const assetId = req.params.assetId as string;
     await assertKnownProduct(productId);
-    const asset = await rejectAsset({ productRoot: config.productRoot, productId, assetId });
-    const gallery = await removeGalleryAsset({ productRoot: config.productRoot, productId, assetId });
-    res.json({ asset, gallery });
+    res.json(await rejectGalleryAsset({ productRoot: config.productRoot, productId, assetId }));
   })
 );
 

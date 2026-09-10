@@ -1,0 +1,125 @@
+.galleryWorkspaceV2 { grid-template-rows: 58px minmax(0, 1fr) auto; height: 100dvh; }
+.galleryWorkspaceV2 .galleryExportBody { grid-template-columns: 264px minmax(0, 1fr); }
+.galleryWorkspaceV2 .galleryFamilyPanel { grid-template-rows: auto auto minmax(0, 1fr); }
+.galleryVisuallyHidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.galleryFamilySearch { display: grid; gap: 7px; padding: 0 12px 12px; border-bottom: 1px solid var(--border); }
+.galleryFamilySearch label { font-size: 11px; font-weight: 650; }
+.galleryFamilySearch input { min-width: 0; width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); font: inherit; font-size: 12px; }
+.galleryFamilySearch small, .galleryFamilySearch p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.galleryWorkspaceV2 .galleryFamilyRow { margin-bottom: 6px; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+.galleryWorkspaceV2 .galleryFamilyRow.isActive { border-color: var(--accent); box-shadow: none; background: var(--accent-soft); }
+.galleryWorkspaceV2 .galleryFamilyRow > button { display: flex; align-items: center; gap: 9px; padding: 9px 8px 9px 0; }
+.galleryFamilyThumb { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 42px; overflow: hidden; }
+.galleryFamilyThumb img { width: 100%; height: 100%; object-fit: contain; }
+.galleryFamilyCopy { min-width: 0; display: grid; gap: 4px; flex: 1; }
+.galleryWorkspaceV2 .galleryFamilyCopy small { font-size: 10px; line-height: 1.4; white-space: normal; color: var(--muted); }
+.galleryWorkspaceV2 .galleryFamilyRow > button > .familyShapeStatus { flex-direction: column; gap: 3px; flex: 0 0 10px; }
+.galleryWorkspaceV2 .galleryFamilyRow .familyShapeStatusSlot { width: 10px; height: 10px; flex-basis: 10px; }
+.galleryWorkspaceV2 .galleryFamilyRow .familyShapeGlyph { width: 10px; height: 10px; }
+.galleryWorkspaceV2 .galleryFamilyRow .familyShapeGlyph.shape-runner { width: 5px; }
+.galleryFamilyNotice { grid-column: 1 / -1; margin: 0; padding: 0 10px 10px; font-size: 11px; line-height: 1.4; color: #854d0e; }
+.galleryWorkspaceV2 .galleryFamilyCopy > span:not(.familyShapeStatus) { display: block; }
+.galleryWorkspaceV2 .galleryCurationHeader p { font-size: 11px; color: var(--muted); margin: 4px 0 0; }
+.galleryShapeSection { min-width: 0; padding: 0 0 16px; margin: 0 0 16px; border-bottom: 1px solid var(--border); scroll-margin-top: 12px; }
+.galleryShapeSection:last-child { border-bottom: 0; margin-bottom: 0; }
+.galleryShapeHeading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.galleryShapeHeading > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.galleryShapeHeading h4 { margin: 0; font-size: 14px; text-transform: capitalize; }
+.galleryShapeHeading span, .galleryShapeHeading small { font-size: 10px; color: var(--muted); }
+.galleryShapeHeading .isReady { color: #166534; }
+.galleryShapeHeading .isNotReady { color: #854d0e; }
+.galleryShapeHeading label { display: flex; align-items: center; gap: 6px; min-height: 30px; font-size: 11px; cursor: pointer; }
+.galleryShapeHeading input { width: 15px; height: 15px; accent-color: var(--accent); }
+.galleryShapeWarning { display: flex; align-items: center; gap: 6px; color: #854d0e; font-size: 11px; margin: -4px 0 12px; }
+.galleryShapeWarning svg { flex-shrink: 0; }
+.galleryShapeLoading { display: flex; align-items: center; gap: 7px; min-height: 110px; color: var(--muted); font-size: 12px; }
+.galleryShapeSection.isUnavailable p, .galleryBaseOnly { color: var(--muted); font-size: 11px; margin: 10px 0; }
+.galleryWorkspaceV2 .gallerySectionLabel { gap: 8px; align-items: flex-start; max-width: none; margin-left: 0; margin-right: 0; }
+.galleryWorkspaceV2 .gallerySectionLabel > span:last-child { text-align: right; }
+.galleryWorkspaceV2 .galleryOrderedList { display: flex; gap: 9px; flex-wrap: wrap; max-width: none; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; overflow: visible; }
+.galleryWorkspaceV2 .galleryOrderRow, .galleryWorkspaceV2 .galleryOrderRow.isMain { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 156px; padding: 7px; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+.galleryWorkspaceV2 .galleryOrderThumb { width: 100%; height: auto; aspect-ratio: 1; border: 0; border-radius: 4px; }
+.galleryWorkspaceV2 .galleryOrderThumb img { object-fit: contain; }
+.galleryWorkspaceV2 .galleryPosition { position: absolute; top: 10px; left: 10px; padding: 2px 4px; border-radius: 3px; background: #fff; color: var(--text); z-index: 1; }
+.galleryWorkspaceV2 .galleryDragHandle { position: absolute; top: 11px; right: 10px; background: #fff; border-radius: 3px; z-index: 1; }
+.galleryWorkspaceV2 .galleryOrderCopy { min-width: 0; }
+.galleryWorkspaceV2 .galleryOrderCopy strong { font-size: 10px; white-space: normal; line-height: 1.4; }
+.galleryWorkspaceV2 .galleryOrderCopy span { display: block; font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.galleryWorkspaceV2 .galleryOrderActions { justify-content: flex-end; margin-top: auto; }
+.galleryWorkspaceV2 .galleryLock { align-self: flex-end; margin-top: auto; }
+.galleryRestoreDisclosure { margin-top: 12px; font-size: 11px; }
+.galleryRestoreDisclosure summary { cursor: pointer; font-weight: 650; min-height: 28px; padding: 5px 0; }
+.galleryRestoreDisclosure p { color: var(--muted); margin: 4px 0 10px; }
+.galleryWorkspaceV2 .galleryInlineNotice button { flex-shrink: 0; min-height: 28px; padding: 4px 8px; background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; }
+.galleryWorkspaceV2 :is(button, input, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.galleryWorkspaceV2 button:disabled, .galleryWorkspaceV2 input:disabled { cursor: not-allowed; }
+.galleryWorkspaceV2 .isBaseOnly .galleryOrderRow.isMain { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; align-items: center; width: 100%; gap: 12px; }
+.galleryWorkspaceV2 .isBaseOnly .galleryOrderThumb { width: 88px; height: 88px; }
+.galleryWorkspaceV2 .isBaseOnly .galleryLock { align-self: center; margin: 0; }
+.galleryWorkspaceV2 .galleryOrderCopy strong { font-size: 11px; }
+.galleryWorkspaceV2 .galleryOrderCopy span { font-size: 10px; }
+.galleryWorkspaceV2 .gallerySectionLabel { margin-bottom: 8px; }
+.galleryReadinessButton, .galleryTextButton { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 11px; min-height: 32px; padding: 4px 8px; cursor: pointer; }
+.galleryReadinessButton { border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); }
+.galleryReadinessButton.isReady { color: #166534; }
+.galleryWorkspaceV2 .galleryShapeControls { gap: 12px; }
+.galleryExportBar { position: relative; min-width: 0; padding: 12px 16px; padding-bottom: max(12px, env(safe-area-inset-bottom)); background: #fff; border-top: 1px solid var(--border); z-index: 2; }
+.galleryExportBarMain { display: flex; align-items: center; gap: 12px; }
+.galleryWorkspaceV2 :is(.galleryPrimaryButton, .gallerySecondaryButton) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 12px; border-radius: 7px; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.galleryWorkspaceV2 :is(.galleryPrimaryButton, .gallerySecondaryButton):disabled { opacity: 0.5; cursor: not-allowed; }
+.galleryWorkspaceV2 .galleryPrimaryButton:not(:disabled):hover { filter: brightness(0.94); }
+.galleryWorkspaceV2 .gallerySecondaryButton:not(:disabled):hover { background: var(--accent-soft); }
+.galleryBatchSummary { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.galleryBatchSummary > button { justify-self: start; border: 0; background: none; padding: 0; min-height: 24px; font: inherit; font-size: 13px; font-weight: 650; color: var(--text); cursor: pointer; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.galleryBatchSummary > span { color: var(--muted); font-size: 11px; }
+.galleryExportBar :is(.galleryPrimaryButton, .gallerySecondaryButton) { min-height: 40px; min-width: 156px; }
+.galleryExportBar .galleryJobProgress, .galleryExportBar .galleryExportError { margin: 0 0 10px; }
+.galleryExportWarnings { font-size: 11px; margin-bottom: 8px; }
+.galleryExportWarnings summary { cursor: pointer; min-height: 24px; }
+.galleryExportWarnings .galleryPreflightResults { max-height: 25vh; overflow: auto; margin: 8px 0; }
+.galleryBatchBreakdown { position: absolute; bottom: 100%; left: 16px; width: min(420px, calc(100vw - 32px)); max-height: 40vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: #fff; padding: 12px; }
+.galleryBatchBreakdown > strong { display: block; font-size: 12px; margin-bottom: 8px; }
+.galleryBatchBreakdown button { display: flex; justify-content: space-between; gap: 12px; width: 100%; border: 0; border-bottom: 1px solid var(--border); padding: 10px 0; background: transparent; color: var(--text); cursor: pointer; font-size: 12px; text-align: left; }
+.galleryBatchBreakdown span, .galleryBatchBreakdown p { color: var(--muted); font-size: 11px; }
+.galleryCheckIssues, .galleryHistory { margin: 0 0 20px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: #fff; font-size: 12px; }
+.galleryCheckIssues { border-color: #f2c88d; }
+.galleryCheckIssues > p, .galleryHistory p { color: var(--muted); line-height: 1.5; }
+.galleryCheckIssues .galleryPreflightResults { margin: 0; }
+.galleryCheckIssues .galleryPreflightShapes { max-height: 240px; overflow: auto; }
+.galleryIssueActions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.galleryHistory article { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--border); }
+.galleryHistory article span { color: var(--muted); font-size: 11px; }
+.galleryWorkspaceV2 .galleryHistoryButton { width: auto; padding: 0 10px; font-size: 11px; }
+@media (max-width: 1200px) {
+  .galleryWorkspaceV2 .galleryExportBody { grid-template-columns: 240px minmax(0, 1fr); overflow: hidden; }
+  .galleryWorkspaceV2 .galleryCurationPanel { min-height: 0; overflow: hidden; }
+  .galleryWorkspaceV2 .galleryCurationScroll { overflow: auto; padding-bottom: 16px; }
+}
+@media (max-width: 700px) {
+  .galleryWorkspaceV2 { grid-template-rows: auto minmax(0, 1fr) auto; }
+  .galleryWorkspaceV2 .galleryExportHeader { min-height: 58px; padding: 8px 12px; }
+  .galleryWorkspaceV2 .galleryExportTitle p { display: none; }
+  .galleryWorkspaceV2 .galleryExportTitle h2 { font-size: 16px; }
+  .galleryWorkspaceV2 .galleryExportHeaderMeta { gap: 6px; }
+  .galleryWorkspaceV2 .galleryExportBody { display: block; overflow: auto; }
+  .galleryWorkspaceV2 .galleryFamilyPanel { display: grid; max-height: 290px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .galleryWorkspaceV2 .galleryFamilyList { display: block; max-height: 145px; overflow: auto; }
+  .galleryWorkspaceV2 .galleryFamilyRow { grid-template-columns: 28px minmax(0, 1fr); }
+  .galleryWorkspaceV2 .galleryCurationHeader { padding: 12px; }
+  .galleryWorkspaceV2 .galleryCurationScroll { padding: 12px; }
+  .galleryWorkspaceV2 .galleryOrderRow, .galleryWorkspaceV2 .galleryOrderRow.isMain { width: calc(50% - 5px); }
+  .galleryWorkspaceV2 .galleryCurationPanel { overflow: visible; }
+  .galleryWorkspaceV2 .galleryCurationScroll { overflow: visible; }
+  .galleryWorkspaceV2 .galleryFamilyRow { min-width: 0; }
+  .galleryWorkspaceV2 .galleryFamilySearch input { font-size: 16px; }
+  .galleryWorkspaceV2 .galleryOrderActions button, .galleryWorkspaceV2 .galleryShapeHeading label { min-height: 44px; }
+  .galleryWorkspaceV2 .galleryOrderActions button { min-width: 36px; }
+  .galleryExportBar { padding: 10px 12px; }
+  .galleryExportBarMain { flex-wrap: wrap; gap: 8px; }
+  .galleryBatchSummary { flex-basis: calc(100% - 64px); }
+  .galleryBatchSummary > span { display: none; }
+  .galleryExportBar :is(.galleryPrimaryButton, .gallerySecondaryButton) { width: 100%; min-height: 44px; }
+  .galleryWorkspaceV2 .galleryReadinessButton { min-height: 44px; }
+  .galleryWorkspaceV2 .isBaseOnly .galleryOrderRow.isMain { grid-template-columns: 72px minmax(0, 1fr) auto; }
+  .galleryWorkspaceV2 .isBaseOnly .galleryOrderThumb { width: 72px; height: 72px; }
+}

@@ -24,6 +24,7 @@ interface RightPanelProps {
   selectedAsset: LocatedAsset | null;
   compareAssets: LocatedAsset[];
   onModeChange: (mode: AppMode) => void;
+  onExportReadyChange: (ready: boolean) => void;
   onLoadShot: (shot: Shot) => void;
   savingState: boolean;
   busyAction: string | null;
@@ -59,6 +60,7 @@ export function RightPanel({
   selectedAsset,
   compareAssets,
   onModeChange,
+  onExportReadyChange,
   onLoadShot,
   savingState,
   busyAction,
@@ -84,6 +86,7 @@ export function RightPanel({
 }: RightPanelProps) {
   return (
     <main className="rightPanel">
+      <div className="studioReviewToolbar">
       <div className="modeSwitch" role="tablist" aria-label="Right panel mode">
         <button
           type="button"
@@ -99,6 +102,20 @@ export function RightPanel({
         >
           Compare
         </button>
+      </div>
+      <div className="exportReadinessControl" role="group" aria-label={`${product?.shape ?? "Shape"} export readiness`} aria-busy={busyAction === "export-readiness"}>
+        <span className="exportReadinessLabel">Export</span>
+        <div className="exportReadinessSegments">
+        <button type="button" className={!product?.exportReady ? "isActive" : ""} aria-pressed={!product?.exportReady}
+          disabled={!product || Boolean(busyAction) || Boolean(product.readinessError)} onClick={() => onExportReadyChange(false)}>Not ready</button>
+        <button type="button" className={product?.exportReady ? "isActive" : ""} aria-pressed={Boolean(product?.exportReady)}
+          disabled={!product || product.status !== "ready" || !product.baseImage || Boolean(busyAction) || Boolean(product.readinessError)}
+          title={product?.status !== "ready" ? "A valid main image is needed before marking this shape ready" : "Mark this shape ready for export"}
+          onClick={() => onExportReadyChange(true)}>Ready</button>
+        </div>
+        {busyAction === "export-readiness" ? <span role="status">Saving…</span> : null}
+        {product?.readinessError ? <span role="alert">Readiness unavailable</span> : null}
+      </div>
       </div>
 
       {mode === "generate" ? (

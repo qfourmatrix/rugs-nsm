@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   acceptAsset,
+  acceptAllDoneAssets,
   cancelJob,
   createProduct,
   generateFromPromptBox,
@@ -17,6 +18,7 @@ import {
   getAppInfo,
   getBackgroundLibrary,
   getGenerated,
+  getGallerySelection,
   getJobs,
   getMasterShots,
   getProducts,
@@ -31,6 +33,7 @@ import {
   updateBackgroundManifest,
   updateLabelLogoPath,
   updateMasterShots,
+  updateGalleryReadiness,
   updateProductBackground,
   updateProductState,
   updateRefineSettings,
@@ -62,6 +65,7 @@ import type {
 import { DEFAULT_SOS_CUSTOM_PALETTE } from "../shared/sos-palettes";
 import type { AppMode } from "./types";
 import { getErrorMessage, isRunningJob, pluralize, toLocatedAssets } from "./utils";
+import "./studio-review.css";
 
 const emptyGenerated: GeneratedResponse = {
   active: [],
@@ -104,6 +108,7 @@ export function App() {
   const [selectedError, setSelectedError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [reviewNotice, setReviewNotice] = useState<{ productId: string; message: string } | null>(null);
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [galleryExportOpen, setGalleryExportOpen] = useState(false);
@@ -147,8 +152,8 @@ export function App() {
   );
 
   const allAssets = useMemo(
-    () => toLocatedAssets(generated.active, generated.trash),
-    [generated.active, generated.trash]
+    () => toLocatedAssets(generated.active, generated.trash).filter((asset) => asset.productId === selectedProductId),
+    [generated.active, generated.trash, selectedProductId]
   );
 
   const selectedAsset = useMemo(() => {
@@ -724,11 +729,41 @@ export function App() {
       const productId = selectedProductRef.current;
 
       if (productId) {
-        void runMutation("accept", () => acceptAsset(productId, assetId));
+        void runMutation("accept", async () => {
+          await acceptAsset(productId, assetId);
+          setReviewNotice({ productId, message: "Accepted. Gallery changed — review and mark ready again." });
+        });
       }
     },
     [runMutation]
   );
+
+  const handleAcceptAllDone = useCallback((assetIds: string[]) => {
+    const productId = selectedProductRef.current;
+    if (!productId || assetIds.length === 0) return;
+    void runMutation("accept-all", async () => {
+      const result = await acceptAllDoneAssets(productId, assetIds);
+      const accepted = result.results.filter((item) => item.status === "accepted").length;
+      const skipped = result.results.filter((item) => item.status === "skipped");
+      setReviewNotice({ productId, message: `${accepted} accepted${skipped.length ? ` · ${skipped.length} skipped (${[...new Set(skipped.map((item) => item.reason ?? "Asset changed"))].join(", ")})` : ""}${accepted ? ". Gallery changed — review and mark ready again." : "."}` });
+    });
+  }, [runMutation]);
+
+  const handleExportReadyChange = useCallback((exportReady: boolean) => {
+    const productId = selectedProductRef.current;
+    if (!productId || !selectedProduct || selectedProduct.id !== productId || Boolean(selectedProduct.exportReady) === exportReady) return;
+    const expectedRevision = selectedProduct.galleryRevision;
+    void runMutation("export-readiness", async () => {
+      try {
+        const revision = expectedRevision ?? (await getGallerySelection(productId)).revision;
+        await updateGalleryReadiness(productId, exportReady, revision);
+        setReviewNotice({ productId, message: exportReady ? "Marked ready for export." : "Marked not ready for export." });
+      } catch (error) {
+        await loadShell(true);
+        throw error;
+      }
+    });
+  }, [loadShell, runMutation, selectedProduct]);
 
   const handleReject = useCallback(
     (assetId: string) => {
@@ -1072,11 +1107,14 @@ export function App() {
             assets={allAssets}
             selectedAssetId={productState?.selectedAssetId ?? null}
             showTrash={showTrash}
-            actionDisabled={Boolean(busyAction)}
+            actionDisabled={isBusy}
             runningShotIds={runningShotIds}
             onShowTrashChange={setShowTrash}
             onSelectAsset={handleSelectAsset}
             onAccept={handleAccept}
+            onAcceptAllDone={handleAcceptAllDone}
+            acceptingAll={busyAction === "accept-all"}
+            reviewNotice={reviewNotice?.productId === selectedProductId ? reviewNotice.message : null}
             onReject={handleReject}
             onRetry={handleRetryAsset}
             onCancelJob={(jobId) => void runMutation("cancel-job", () => cancelJob(jobId))}
@@ -1103,9 +1141,10 @@ export function App() {
             selectedAsset={selectedAsset}
             compareAssets={allAssets}
             onModeChange={setMode}
+            onExportReadyChange={handleExportReadyChange}
             onLoadShot={handleLoadShot}
             savingState={savingState}
-            busyAction={busyAction}
+            busyAction={busyAction ?? (isLoadingProduct ? "loading-product" : null)}
             runningShotIds={runningShotIds}
             onPromptChange={handlePromptChange}
             onSettingsChange={handleSettingsChange}
@@ -1166,6 +1205,7 @@ export function App() {
           currentProduct={selectedProduct}
           masterShots={masterShots}
           onClose={() => setGalleryExportOpen(false)}
+          onGalleryChanged={() => { setReviewNotice(null); void loadShell(true); }}
         />
       ) : null}
     </div>

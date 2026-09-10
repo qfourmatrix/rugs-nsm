@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, Eye, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { thumbnailUrl } from "../api";
 import type { LocatedAsset } from "../types";
 import { formatDateTime, truncate } from "../utils";
@@ -26,7 +27,15 @@ export function AttemptCard({
   onReject,
   onRetry
 }: AttemptCardProps) {
-  const canAccept = !actionDisabled && asset.status !== "failed" && asset.status !== "rejected";
+  const acceptedRef = useRef<HTMLSpanElement>(null);
+  const retainAcceptFocus = useRef(false);
+  useEffect(() => {
+    if (asset.status === "accepted" && retainAcceptFocus.current) {
+      acceptedRef.current?.focus();
+      retainAcceptFocus.current = false;
+    }
+  }, [asset.status]);
+  const canAccept = !actionDisabled && asset.status === "done" && asset.location === "generated" && Boolean(asset.output?.file);
   const canReject = !actionDisabled && asset.status !== "failed" && asset.status !== "rejected";
   const canRetry = !actionDisabled && !retryDisabled;
   const imageFile = asset.output?.file ?? null;
@@ -80,6 +89,15 @@ export function AttemptCard({
         </div>
       </button>
 
+      {asset.status === "accepted" && asset.location === "generated" ? (
+        <span ref={acceptedRef} tabIndex={-1} className="attemptQuickAccept isAccepted" aria-label={`${asset.shotName} attempt ${asset.attempt} accepted`}><Check size={14} aria-hidden="true" /> Accepted</span>
+      ) : asset.status === "done" && imageFile && asset.location === "generated" ? (
+        <button className="attemptQuickAccept" type="button" disabled={!canAccept}
+          title={`Accept ${asset.shotName} attempt ${asset.attempt}`}
+          aria-label={`Accept ${asset.shotName} attempt ${asset.attempt}`}
+          onClick={(event) => { retainAcceptFocus.current = document.activeElement === event.currentTarget; onAccept(asset.assetId); }}><Check size={14} aria-hidden="true" /> Accept</button>
+      ) : null}
+
       <div className="attemptActions">
         <button
           className="iconTextButton reviewAction"
@@ -89,16 +107,6 @@ export function AttemptCard({
         >
           <Eye size={14} />
           <span>Review</span>
-        </button>
-        <button
-          className="iconButton"
-          type="button"
-          title={`Accept ${asset.shotName} attempt ${asset.attempt}`}
-          aria-label={`Accept ${asset.shotName} attempt ${asset.attempt}`}
-          disabled={!canAccept || asset.status === "accepted"}
-          onClick={() => onAccept(asset.assetId)}
-        >
-          <Check size={15} />
         </button>
         <button
           className="iconButton"

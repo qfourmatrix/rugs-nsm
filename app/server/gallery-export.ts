@@ -1,6 +1,6 @@
 import { createWriteStream, promises as fs } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ZipArchive, type Archiver, type EntryData } from "archiver";
 import sharp from "sharp";
 import type {
@@ -17,7 +17,7 @@ import type {
   ProductSummary,
   Shot
 } from "../shared/types";
-import { generatedDir, listGeneratedAssets } from "./asset-store";
+import { generatedDir, getAssetRecord } from "./asset-store";
 import { conflictError, notFoundError, validationError } from "./errors";
 import { atomicWriteJson, ensureDir, regularFileExists, safeChildPath, sha256File } from "./fsUtils";
 import { isGalleryEligibleAsset, loadGallerySelection, UTILITY_SHOT_IDS } from "./gallery-store";
@@ -199,6 +199,8 @@ async function inspectShape({
   const issues: GalleryPreflightIssue[] = [];
   const items: ResolvedExportItem[] = [];
   let selectionAssetIds: string[] = [];
+  let galleryRevision = 0;
+  let exportReady = false;
 
   if (product.status !== "ready" || !product.baseImage) {
     issues.push(issue(product, "blocker", "INVALID_MAIN_IMAGE", product.errors[0] ?? "A valid base.* main image is required."));
@@ -213,31 +215,30 @@ async function inspectShape({
   }
 
   try {
-    selectionAssetIds = (await loadGallerySelection({ productRoot, productId: product.id })).assetIds;
+    const gallery = await loadGallerySelection({ productRoot, productId: product.id, verifyContent: true });
+    selectionAssetIds = gallery.assetIds;
+    galleryRevision = gallery.revision;
+    exportReady = gallery.exportReady;
   } catch (error) {
     issues.push(issue(product, "blocker", "INVALID_GALLERY_SELECTION", error instanceof Error ? error.message : "Gallery selection is invalid."));
   }
 
-  if (selectionAssetIds.length === 0) {
-    issues.push(issue(product, "blocker", "NO_SELECTED_GENERATION", "Select at least one accepted generated image."));
-  }
-
-  let active: AssetRecord[] = [];
-  let trash: AssetRecord[] = [];
-  try {
-    const generated = await listGeneratedAssets({ productRoot, productId: product.id });
-    active = generated.active;
-    trash = generated.trash;
-  } catch (error) {
-    issues.push(issue(product, "blocker", "UNREADABLE_GENERATED_ASSETS", error instanceof Error ? error.message : "Generated assets are unreadable."));
-  }
-  const activeById = new Map(active.map((asset) => [asset.assetId, asset]));
-  const trashById = new Map(trash.map((asset) => [asset.assetId, asset]));
   const selectedAssets: AssetRecord[] = [];
 
   for (const [index, assetId] of selectionAssetIds.entries()) {
-    const activeAsset = activeById.get(assetId);
-    const rejectedAsset = trashById.get(assetId);
+    let activeAsset: AssetRecord | undefined;
+    let rejectedAsset: AssetRecord | undefined;
+    try {
+      const found = await getAssetRecord({ productRoot, productId: product.id, assetId });
+      if (found.asset.productId !== product.id) throw new Error("Asset belongs to another product.");
+      if (found.location === "trash") rejectedAsset = found.asset;
+      else activeAsset = found.asset;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ASSET_NOT_FOUND")) {
+        issues.push(issue(product, "blocker", "UNREADABLE_GALLERY_ASSET", error instanceof Error ? error.message : "Selected asset metadata is unreadable.", assetId));
+        continue;
+      }
+    }
     if (!activeAsset) {
       issues.push(issue(
         product,
@@ -272,7 +273,8 @@ async function inspectShape({
 
   const masterShotIds = new Set(masterShots.map((shot) => shot.id));
   const selectedShotIds = new Set(selectedAssets.map((asset) => asset.shotId));
-  for (const shot of masterShots) {
+  if (selectionAssetIds.length === 0) issues.push(issue(product, "warning", "BASE_ONLY_GALLERY", "Base-only gallery: no generated shots selected."));
+  for (const shot of selectionAssetIds.length ? masterShots : []) {
     if (!selectedShotIds.has(shot.id)) {
       issues.push(issue(product, "warning", "MISSING_MASTER_SHOT", `${shot.name} is not selected.`));
     }
@@ -312,6 +314,9 @@ async function inspectShape({
     shape: product.shape,
     status: issues.some((candidate) => candidate.severity === "blocker") ? "skipped" : "ready",
     itemCount: 1 + selectionAssetIds.length,
+    galleryRevision,
+    exportReady,
+    contentFingerprint: createHash("sha256").update(JSON.stringify({ galleryRevision, selectionAssetIds, sources: items.map((item) => [item.sourceFile, item.sourceSha256]) })).digest("hex"),
     issues
   };
   return { summary, product, items };
@@ -374,19 +379,28 @@ async function finalizeArchive(archive: Archiver, output: ReturnType<typeof crea
 export async function buildGalleryExport({
   productRoot,
   productIds,
+  expectedFingerprints,
   exportId = `export_${randomUUID()}`,
   onProgress = () => undefined
 }: {
   productRoot: string;
   productIds: string[];
+  expectedFingerprints?: Record<string, string>;
   exportId?: string;
   onProgress?: ProgressCallback;
 }): Promise<BuildResult> {
   const createdAt = new Date().toISOString();
   const inspected = await inspectGalleryExport(productRoot, productIds);
+  for (const candidate of inspected) {
+    if (expectedFingerprints && expectedFingerprints[candidate.product.id] !== candidate.summary.contentFingerprint) {
+      candidate.summary.status = "skipped";
+      candidate.summary.issues.push(issue(candidate.product, "blocker", "CONTENT_CHANGED", "Gallery or image content changed after preflight. Review it and run preflight again."));
+    }
+  }
   const ready = inspected.filter((candidate) => candidate.summary.status === "ready");
   if (ready.length === 0) {
-    throw validationError("NO_EXPORTABLE_SHAPES", "No selected shapes passed preflight.", inspected.map((candidate) => candidate.summary));
+    const contentChanged = inspected.some((candidate) => candidate.summary.issues.some((entry) => entry.code === "CONTENT_CHANGED"));
+    throw validationError("NO_EXPORTABLE_SHAPES", contentChanged ? "Gallery changed after preflight. Review it and run preflight again." : "No selected shapes passed preflight.", inspected.map((candidate) => candidate.summary));
   }
 
   const tempDir = safeChildPath(exportJobsDir(productRoot), exportId);
@@ -408,6 +422,8 @@ export async function buildGalleryExport({
         productId: candidate.product.id,
         familyId: candidate.product.familyId,
         shape: candidate.product.shape,
+        exportReady: candidate.summary.exportReady,
+        galleryRevision: candidate.summary.galleryRevision,
         status: "skipped",
         issues: candidate.summary.issues,
         images: []
@@ -419,10 +435,14 @@ export async function buildGalleryExport({
     const shapeSegment = candidate.product.shape;
     const imageReceipts: GalleryExportImageReceipt[] = [];
     for (const item of candidate.items) {
+      // Freeze byte-identical originals before conversion/archive reads can race a main replacement.
+      const originalSnapshot = safeChildPath(workDir, `${candidate.product.id}-${item.position}-original-${item.sourceFile}`);
+      await fs.copyFile(item.sourcePath, originalSnapshot);
+      if (await sha256File(originalSnapshot) !== item.sourceSha256) throw conflictError("CONTENT_CHANGED", "An image changed during export. Run preflight again.");
       const shopifyFilename = outputName(candidate.product, item);
       const stagedName = `${candidate.product.id}-${item.position}-${shopifyFilename}`;
       const stagedPath = safeChildPath(workDir, stagedName);
-      const converted = await writeShopifyFile(item, stagedPath);
+      const converted = await writeShopifyFile({ ...item, sourcePath: originalSnapshot }, stagedPath);
       const originalArchivePath = `${familySegment}/${shapeSegment}/originals/${item.sourceFile}`;
       const shopifyArchivePath = `${familySegment}/${shapeSegment}/shopify/${shopifyFilename}`;
       imageReceipts.push({
@@ -441,7 +461,7 @@ export async function buildGalleryExport({
         sourceSha256: item.sourceSha256,
         outputSha256: converted.outputSha256
       });
-      fileEntries.push({ sourcePath: item.sourcePath, archivePath: originalArchivePath });
+      fileEntries.push({ sourcePath: originalSnapshot, archivePath: originalArchivePath });
       fileEntries.push({ sourcePath: stagedPath, archivePath: shopifyArchivePath });
       completed += 1;
       report(`Optimized ${shopifyFilename}`);
@@ -450,6 +470,8 @@ export async function buildGalleryExport({
       productId: candidate.product.id,
       familyId: candidate.product.familyId,
       shape: candidate.product.shape,
+      exportReady: candidate.summary.exportReady,
+      galleryRevision: candidate.summary.galleryRevision,
       status: "included",
       issues: candidate.summary.issues,
       images: imageReceipts
@@ -457,6 +479,11 @@ export async function buildGalleryExport({
   }
 
   const completedAt = new Date().toISOString();
+  const selectedFamilies = new Set(inspected.map((candidate) => candidate.product.familyId));
+  const selectedIds = new Set(productIds);
+  const notSelectedShapes = (await scanProducts({ productRoot })).products
+    .filter((product) => selectedFamilies.has(product.familyId) && !selectedIds.has(product.id))
+    .map((product) => ({ productId: product.id, familyId: product.familyId, shape: product.shape }));
   const manifest = {
     version: 1 as const,
     exportId,
@@ -464,6 +491,7 @@ export async function buildGalleryExport({
     createdAt,
     completedAt,
     requestedProductIds: [...productIds],
+    notSelectedShapes,
     encoder: GALLERY_EXPORT_ENCODER,
     shapes: receiptShapes,
     includedShapes: receiptShapes.filter((shape) => shape.status === "included").length,
@@ -524,7 +552,7 @@ export class GalleryExportRegistry {
 
   constructor(private readonly productRoot: string) {}
 
-  start(productIds: string[]) {
+  start(productIds: string[], expectedFingerprints?: Record<string, string>) {
     const exportId = `export_${randomUUID()}`;
     const now = new Date().toISOString();
     const job: GalleryExportJob = {
@@ -538,7 +566,7 @@ export class GalleryExportRegistry {
       receipt: null
     };
     this.jobs.set(exportId, job);
-    void this.run(exportId, productIds);
+    void this.run(exportId, productIds, expectedFingerprints);
     return structuredClone(job);
   }
 
@@ -574,7 +602,7 @@ export class GalleryExportRegistry {
     });
   }
 
-  private async run(exportId: string, productIds: string[]) {
+  private async run(exportId: string, productIds: string[], expectedFingerprints?: Record<string, string>) {
     const current = this.jobs.get(exportId);
     if (!current) return;
     this.jobs.set(exportId, { ...current, status: "building", updatedAt: new Date().toISOString(), progress: { completed: 0, total: 1, message: "Preflighting selection" } });
@@ -582,6 +610,7 @@ export class GalleryExportRegistry {
       const build = await buildGalleryExport({
         productRoot: this.productRoot,
         productIds,
+        expectedFingerprints,
         exportId,
         onProgress: (progress) => {
           const job = this.jobs.get(exportId);
