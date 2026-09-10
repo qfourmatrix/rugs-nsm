@@ -74,6 +74,9 @@ export interface ProductSummary {
   status: "ready" | "missing_base" | "duplicate_base" | "invalid_variant";
   baseImage: string | null;
   referenceImages: string[];
+  exportReady?: boolean;
+  galleryRevision?: number;
+  readinessError?: string;
   counts: {
     totalShots: number;
     accepted: number;
@@ -291,11 +294,23 @@ export interface GeneratedResponse {
 }
 
 export interface GallerySelection {
-  version: 1;
+  version: 2;
   productId: string;
   assetIds: string[];
   initializedAt: string;
   updatedAt: string;
+  revision: number;
+  exportReady: boolean;
+  readyAt: string | null;
+  reviewedContent: {
+    fingerprint: string;
+    files: { path: string; size: number; mtimeMs: number; ctimeMs: number; sha256: string }[];
+  } | null;
+}
+
+export interface BulkAcceptResult {
+  gallery: GallerySelection;
+  results: { assetId: string; status: "accepted" | "already_accepted" | "skipped"; reason?: string }[];
 }
 
 export type GalleryIssueSeverity = "warning" | "blocker";
@@ -317,6 +332,9 @@ export interface GalleryPreflightShape {
   status: "ready" | "skipped";
   itemCount: number;
   issues: GalleryPreflightIssue[];
+  contentFingerprint?: string;
+  exportReady?: boolean;
+  galleryRevision?: number;
 }
 
 export interface GalleryPreflight {
@@ -351,6 +369,8 @@ export interface GalleryExportImageReceipt {
 }
 
 export interface GalleryExportShapeReceipt {
+  exportReady?: boolean;
+  galleryRevision?: number;
   productId: string;
   familyId: string;
   shape: ProductShape;
@@ -380,6 +400,7 @@ export interface GalleryExportReceipt {
   completedAt: string;
   downloadedAt: string | null;
   requestedProductIds: string[];
+  notSelectedShapes?: { productId: string; familyId: string; shape: ProductShape }[];
   encoder: GalleryExportEncoderSettings;
   shapes: GalleryExportShapeReceipt[];
   includedShapes: number;

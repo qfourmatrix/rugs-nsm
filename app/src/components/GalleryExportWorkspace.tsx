@@ -2,7 +2,6 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
-  Check,
   CheckCircle2,
   Download,
   GripVertical,
@@ -10,7 +9,6 @@ import {
   LoaderCircle,
   PackageCheck,
   Plus,
-  RefreshCw,
   ShieldCheck,
   Trash2,
   X,
@@ -37,9 +35,12 @@ import {
   preflightGalleryExport,
   startGalleryExport,
   thumbnailUrl,
+  updateGalleryReadiness,
   updateGallerySelection
 } from "../api";
 import { getErrorMessage } from "../utils";
+import { FamilyShapeStatus } from "./FamilyShapeStatus";
+import "../gallery-workspace-v2.css";
 
 const SHAPES: ProductShape[] = ["area", "runner", "round"];
 const UTILITY_SHOTS = new Set(["refine_base", "shape_runner_base", "shape_round_base"]);
@@ -50,6 +51,28 @@ interface GalleryExportWorkspaceProps {
   currentProduct: ProductSummary | null;
   masterShots: MasterShots | null;
   onClose: () => void;
+  onGalleryChanged?: () => void;
+}
+
+export function hasGalleryBase(product: ProductSummary) {
+  return Boolean(product.baseImage) && product.status === "ready";
+}
+
+export function toggleFamilySelection(family: ProductSummary[], selected: Set<string>) {
+  const next = new Set(selected);
+  if (family.some((product) => next.has(product.id))) {
+    family.forEach((product) => next.delete(product.id));
+  } else {
+    family.filter((product) => hasGalleryBase(product) && product.exportReady && !product.readinessError)
+      .forEach((product) => next.add(product.id));
+  }
+  return next;
+}
+
+export function familySelectionState(family: ProductSummary[], selected: Set<string>) {
+  const available = family.filter(hasGalleryBase);
+  const count = available.filter((product) => selected.has(product.id)).length;
+  return { count, total: available.length, checked: available.length > 0 && count === available.length, mixed: count > 0 && count < available.length };
 }
 
 export function selectedProductIdsForExport(
@@ -74,76 +97,76 @@ export function moveGalleryAsset(assetIds: string[], assetId: string, direction:
 export function GalleryExportWorkspace({
   products,
   currentProduct,
-  masterShots,
-  onClose
+  onClose,
+  onGalleryChanged
 }: GalleryExportWorkspaceProps) {
   const initialProduct = currentProduct ?? products[0] ?? null;
-  const [selectedFamilies, setSelectedFamilies] = useState(() => new Set(initialProduct ? [initialProduct.familyId] : []));
-  const [selectedShapes, setSelectedShapes] = useState<Set<ProductShape>>(() => new Set(initialProduct ? [initialProduct.shape] : ["area"]));
+  const [selectedIds, setSelectedIds] = useState(() => toggleFamilySelection(products.filter((product) => product.familyId === initialProduct?.familyId), new Set()));
+  const [search, setSearch] = useState("");
+  const [selectionNotice, setSelectionNotice] = useState<{ familyId: string; message: string } | null>(null);
+  const [gallerySummaries, setGallerySummaries] = useState<Record<string, GallerySelection>>({});
   const [activeFamilyId, setActiveFamilyId] = useState(initialProduct?.familyId ?? "");
-  const [activeShape, setActiveShape] = useState<ProductShape>(initialProduct?.shape ?? "area");
-  const [gallery, setGallery] = useState<GallerySelection | null>(null);
-  const [generated, setGenerated] = useState<GeneratedResponse>(emptyGenerated);
   const [preflight, setPreflight] = useState<GalleryPreflight | null>(null);
   const [exportJob, setExportJob] = useState<GalleryExportJob | null>(null);
   const [receipts, setReceipts] = useState<GalleryExportReceipt[]>([]);
-  const [loadingGallery, setLoadingGallery] = useState(false);
-  const [savingGallery, setSavingGallery] = useState(false);
+  const [savingProducts, setSavingProducts] = useState<Set<string>>(new Set());
   const [checking, setChecking] = useState(false);
   const [startingExport, setStartingExport] = useState(false);
   const [galleryRevision, setGalleryRevision] = useState(0);
   const [preflightFingerprint, setPreflightFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [draggedAssetId, setDraggedAssetId] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   const preflightRequestIdRef = useRef(0);
+  const exportInFlightRef = useRef(false);
+  const autoDownloadedRef = useRef<string | null>(null);
+  const issueRef = useRef<HTMLDivElement>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [reviewTarget, setReviewTarget] = useState<string | null>(null);
+  const previousProductsRef = useRef(products);
 
   const families = useMemo(() => {
     const map = new Map<string, ProductSummary[]>();
-    for (const product of products) {
+    for (const source of products) {
+      const summary = gallerySummaries[source.id];
+      const product = summary && summary.revision >= (source.galleryRevision ?? 0)
+        ? { ...source, exportReady: summary.exportReady, galleryRevision: summary.revision }
+        : source;
       const family = map.get(product.familyId) ?? [];
       family.push(product);
       map.set(product.familyId, family);
     }
     for (const family of map.values()) family.sort((left, right) => SHAPES.indexOf(left.shape) - SHAPES.indexOf(right.shape));
     return map;
-  }, [products]);
+  }, [products, gallerySummaries]);
   const activeFamily = families.get(activeFamilyId) ?? [];
-  const activeProduct = activeFamily.find((product) => product.shape === activeShape) ?? activeFamily[0] ?? null;
+  const filteredFamilies = [...families.entries()].filter(([id, family]) => `${id} ${family[0]?.name ?? ""}`.toLowerCase().includes(search.trim().toLowerCase()));
   const selectedProductIds = useMemo(
-    () => selectedProductIdsForExport(products, selectedFamilies, selectedShapes),
-    [products, selectedFamilies, selectedShapes]
+    () => products.filter((product) => selectedIds.has(product.id)).map((product) => product.id),
+    [products, selectedIds]
   );
-  const selectionFingerprint = `${selectedProductIds.join("\u0000")}|${galleryRevision}`;
+  const selectedFamilies = new Set(products.filter((product) => selectedIds.has(product.id)).map((product) => product.familyId));
+  const selectionFingerprint = `${selectedProductIds.join("\u0000")}|${galleryRevision}|${products.filter((product) => selectedIds.has(product.id)).map((product) => `${product.id}:${product.galleryRevision}:${product.exportReady}:${product.baseImage}`).join("|")}`;
   const selectionFingerprintRef = useRef(selectionFingerprint);
   selectionFingerprintRef.current = selectionFingerprint;
   onCloseRef.current = onClose;
-  const acceptedAssets = useMemo(
-    () => generated.active.filter((asset) => asset.status === "accepted" && asset.output && !UTILITY_SHOTS.has(asset.shotId) && !asset.inputs.shapeVariant),
-    [generated.active]
-  );
-  const acceptedById = useMemo(() => new Map(acceptedAssets.map((asset) => [asset.assetId, asset])), [acceptedAssets]);
-  const selectedAssets = gallery?.assetIds.map((assetId) => acceptedById.get(assetId) ?? null) ?? [];
-  const availableAssets = acceptedAssets.filter((asset) => !gallery?.assetIds.includes(asset.assetId));
-  const duplicateShots = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const asset of selectedAssets) if (asset) counts.set(asset.shotId, (counts.get(asset.shotId) ?? 0) + 1);
-    return [...counts.entries()].filter(([, count]) => count > 1).map(([shotId, count]) => ({
-      shotId,
-      count,
-      name: selectedAssets.find((asset) => asset?.shotId === shotId)?.shotName ?? shotId
-    }));
-  }, [selectedAssets]);
   const jobRunning = exportJob?.status === "queued" || exportJob?.status === "building";
-  const workflowLocked = checking || savingGallery || startingExport || jobRunning;
+  const workflowLocked = checking || savingProducts.size > 0 || startingExport || jobRunning;
   const preflightIsCurrent = Boolean(preflight && preflightFingerprint === selectionFingerprint);
-  const jobRunningRef = useRef(jobRunning);
+  const unexpectedSkips = exportJob?.receipt?.shapes.filter((shape) => shape.status === "skipped" && !preflight?.shapes.some((checked) => checked.productId === shape.productId && checked.status === "skipped")) ?? [];
+  const selectedImageCount = preflightIsCurrent && preflight
+    ? preflight.shapes.reduce((count, shape) => count + shape.itemCount, 0)
+    : selectedProductIds.every((id) => gallerySummaries[id])
+      ? selectedProductIds.reduce((count, id) => count + gallerySummaries[id].assetIds.length + 1, 0)
+      : null;
+  const closeLocked = workflowLocked;
+  const jobRunningRef = useRef(closeLocked);
 
   useEffect(() => {
-    jobRunningRef.current = jobRunning;
-  }, [jobRunning]);
+    jobRunningRef.current = closeLocked;
+  }, [closeLocked]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -165,7 +188,7 @@ export function GalleryExportWorkspace({
         element.setAttribute("aria-hidden", "true");
       }
     }, 1000);
-    window.requestAnimationFrame(() => closeRef.current?.focus());
+    closeRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !jobRunningRef.current) {
         event.preventDefault();
@@ -174,8 +197,8 @@ export function GalleryExportWorkspace({
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
       const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
-      )];
+        'button:not([disabled]), input:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])'
+      )].filter((element) => !element.closest('details:not([open])') || element.matches('summary'));
       const first = focusable[0];
       const last = focusable.at(-1);
       if (!first || !last) return;
@@ -206,45 +229,67 @@ export function GalleryExportWorkspace({
   }, []);
 
   useEffect(() => {
-    if (!activeProduct) {
-      setGallery(null);
-      setGenerated(emptyGenerated);
-      return;
-    }
+    const changedIds = products.filter((product) => {
+      const previous = previousProductsRef.current.find((entry) => entry.id === product.id);
+      return previous && (product.galleryRevision ?? 0) > (previous.galleryRevision ?? 0) && !product.exportReady;
+    }).map((product) => product.id);
+    previousProductsRef.current = products;
+    if (changedIds.length) setSelectedIds((current) => {
+      const next = new Set(current);
+      changedIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, [products]);
+
+  // Fetch only selected galleries, including those outside the open family.
+  // Bound concurrency so a large batch does not flood the local API.
+  useEffect(() => {
     let cancelled = false;
-    setLoadingGallery(true);
-    setError(null);
-    Promise.all([getGallerySelection(activeProduct.id), getGenerated(activeProduct.id)])
-      .then(([nextGallery, nextGenerated]) => {
-        if (cancelled) return;
-        setGallery(nextGallery);
-        setGenerated(nextGenerated);
-      })
-      .catch((loadError) => {
-        if (!cancelled) setError(getErrorMessage(loadError));
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingGallery(false);
-      });
-    return () => {
-      cancelled = true;
+    const pending = selectedProductIds.filter((id) => !gallerySummaries[id] || gallerySummaries[id].revision < (products.find((product) => product.id === id)?.galleryRevision ?? 0));
+    const worker = async () => {
+      while (pending.length && !cancelled) {
+        const id = pending.shift()!;
+        try {
+          const next = await getGallerySelection(id);
+          if (!cancelled) galleryChanged(next, false);
+        } catch { /* Automatic export checks will report the affected shape. */ }
+      }
     };
-  }, [activeProduct?.id]);
+    void Promise.all(Array.from({ length: Math.min(4, pending.length) }, worker));
+    return () => { cancelled = true; };
+  }, [selectedProductIds.join("\0"), products.map((product) => `${product.id}:${product.galleryRevision}`).join("|")]);
+
+  useEffect(() => {
+    if (!reviewTarget) return;
+    const section = document.getElementById(`gallery-shape-${reviewTarget}`);
+    section?.scrollIntoView?.({ block: "start" });
+    section?.focus();
+    setReviewTarget(null);
+  }, [activeFamilyId, reviewTarget]);
+
+  useEffect(() => {
+    if (preflightIsCurrent && preflight && preflight.skippedCount > 0) issueRef.current?.focus();
+  }, [preflight, preflightIsCurrent]);
 
   useEffect(() => {
     preflightRequestIdRef.current += 1;
     setPreflight(null);
     setPreflightFingerprint(null);
     setChecking(false);
+    setExportJob((current) => current && ["ready", "downloaded", "failed"].includes(current.status) ? null : current);
   }, [selectionFingerprint]);
 
   useEffect(() => {
-    if (!jobRunning || !exportJob) return undefined;
+    if ((!jobRunning && exportJob?.status !== "ready") || !exportJob) return undefined;
     let cancelled = false;
     const poll = async () => {
       try {
         const next = await getGalleryExportJob(exportJob.exportId);
-        if (!cancelled) setExportJob(next);
+        if (!cancelled) {
+          setExportJob(next);
+          setError(null);
+          if (next.status === "downloaded" || next.status === "ready") void getGalleryExportReceipts().then(setReceipts).catch(() => undefined);
+        }
       } catch (pollError) {
         if (!cancelled) setError(getErrorMessage(pollError));
       }
@@ -255,98 +300,101 @@ export function GalleryExportWorkspace({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [exportJob?.exportId, jobRunning]);
+  }, [exportJob?.exportId, exportJob?.status]);
 
-  const chooseActiveFamily = (familyId: string) => {
-    setActiveFamilyId(familyId);
-    const family = families.get(familyId) ?? [];
-    if (!family.some((product) => product.shape === activeShape)) setActiveShape(family[0]?.shape ?? "area");
-  };
+  useEffect(() => {
+    if (exportJob?.status !== "ready" || unexpectedSkips.length > 0 || autoDownloadedRef.current === exportJob.exportId) return;
+    autoDownloadedRef.current = exportJob.exportId;
+    downloadExport();
+  }, [exportJob?.exportId, exportJob?.status]);
 
   const toggleFamily = (familyId: string) => {
-    setSelectedFamilies((current) => {
+    const family = families.get(familyId) ?? [];
+    if (!family.some((product) => selectedIds.has(product.id)) && !family.some((product) => hasGalleryBase(product) && product.exportReady && !product.readinessError)) {
+      setSelectionNotice({ familyId, message: "No ready shapes. Review this rug, or include a yellow shape below." });
+      setActiveFamilyId(familyId);
+    } else setSelectionNotice(null);
+    setSelectedIds((current) => toggleFamilySelection(family, current));
+  };
+
+  const toggleProduct = (productId: string) => {
+    setSelectedIds((current) => {
       const next = new Set(current);
-      if (next.has(familyId)) next.delete(familyId);
-      else next.add(familyId);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
       return next;
     });
   };
 
-  const toggleShape = (shape: ProductShape) => {
-    setSelectedShapes((current) => {
+  const selectReady = () => {
+    setSelectedIds((current) => {
       const next = new Set(current);
-      if (next.has(shape)) next.delete(shape);
-      else next.add(shape);
+      filteredFamilies.forEach(([, family]) => family.filter((product) => hasGalleryBase(product) && product.exportReady && !product.readinessError).forEach((product) => next.add(product.id)));
       return next;
     });
+    setSelectionNotice(null);
   };
 
-  const saveAssetIds = async (assetIds: string[]) => {
-    if (!activeProduct || !gallery) return;
-    const previous = gallery;
-    const productId = activeProduct.id;
-    preflightRequestIdRef.current += 1;
-    setGallery({ ...gallery, assetIds, updatedAt: new Date().toISOString() });
-    setSavingGallery(true);
-    setGalleryRevision((current) => current + 1);
-    setError(null);
-    setPreflight(null);
-    setPreflightFingerprint(null);
-    setChecking(false);
-    try {
-      setGallery(await updateGallerySelection(productId, assetIds));
-    } catch (saveError) {
-      setGallery(previous);
-      setError(getErrorMessage(saveError));
-    } finally {
-      setSavingGallery(false);
+  const galleryChanged = (next: GallerySelection, changed: boolean) => {
+    setGallerySummaries((current) => {
+      if ((current[next.productId]?.revision ?? -1) >= next.revision) return current;
+      return { ...current, [next.productId]: next };
+    });
+    if (changed) {
+      if (!next.exportReady) {
+        setSelectedIds((current) => { const updated = new Set(current); updated.delete(next.productId); return updated; });
+        const product = products.find((entry) => entry.id === next.productId);
+        if (product) setSelectionNotice({ familyId: product.familyId, message: `${shapeLabel(product.shape)} changed. Mark ready again or explicitly include it.` });
+      }
+      setGalleryRevision((current) => current + 1);
+      onGalleryChanged?.();
     }
   };
 
-  const reorder = (assetId: string, direction: -1 | 1) => {
-    if (!gallery) return;
-    void saveAssetIds(moveGalleryAsset(gallery.assetIds, assetId, direction));
-  };
-
-  const dropBefore = (targetId: string) => {
-    if (!gallery || !draggedAssetId || draggedAssetId === targetId) return;
-    const next = gallery.assetIds.filter((assetId) => assetId !== draggedAssetId);
-    const targetIndex = next.indexOf(targetId);
-    next.splice(targetIndex < 0 ? next.length : targetIndex, 0, draggedAssetId);
-    setDraggedAssetId(null);
-    void saveAssetIds(next);
-  };
-
-  const runPreflight = async () => {
-    if (selectedProductIds.length === 0 || workflowLocked) return;
+  const exportSelected = async () => {
+    if (selectedProductIds.length === 0 || workflowLocked || exportInFlightRef.current) return;
+    exportInFlightRef.current = true;
     const requestId = preflightRequestIdRef.current + 1;
     preflightRequestIdRef.current = requestId;
     const fingerprint = selectionFingerprintRef.current;
     const productIds = [...selectedProductIds];
     setChecking(true);
     setError(null);
+    setExportJob(null);
     setPreflight(null);
     setPreflightFingerprint(null);
     try {
       const result = await preflightGalleryExport(productIds);
       if (preflightRequestIdRef.current === requestId && selectionFingerprintRef.current === fingerprint) {
+        const changed = result.shapes.filter((shape) => shape.galleryRevision !== undefined && shape.galleryRevision !== (gallerySummaries[shape.productId]?.revision ?? products.find((product) => product.id === shape.productId)?.galleryRevision ?? 0));
+        if (changed.length) {
+          setError("A gallery changed since you reviewed it. Review the updated shape and export again.");
+          await Promise.all(changed.map(async (shape) => galleryChanged(await getGallerySelection(shape.productId), true)));
+          return;
+        }
         setPreflight(result);
         setPreflightFingerprint(fingerprint);
+        if (result.skippedCount === 0 && result.readyCount > 0) {
+          await buildExport(result);
+        }
+      } else {
+        setError("The selection changed during checks. Review it and export again.");
       }
     } catch (preflightError) {
       if (preflightRequestIdRef.current === requestId) setError(getErrorMessage(preflightError));
     } finally {
       if (preflightRequestIdRef.current === requestId) setChecking(false);
+      exportInFlightRef.current = false;
     }
   };
 
-  const buildExport = async () => {
-    if (!preflight || !preflightIsCurrent || preflight.readyCount === 0 || workflowLocked) return;
-    const productIds = [...preflight.productIds];
+  const buildExport = async (checked: GalleryPreflight) => {
+    const productIds = [...checked.productIds];
     setError(null);
     setStartingExport(true);
     try {
-      setExportJob(await startGalleryExport(productIds));
+      const expectedFingerprints = Object.fromEntries(checked.shapes.filter((shape) => shape.contentFingerprint).map((shape) => [shape.productId, shape.contentFingerprint!]));
+      setExportJob(await startGalleryExport(productIds, expectedFingerprints));
     } catch (exportError) {
       setError(getErrorMessage(exportError));
     } finally {
@@ -362,31 +410,27 @@ export function GalleryExportWorkspace({
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
-    window.setTimeout(() => {
-      void Promise.all([getGalleryExportJob(exportJob.exportId), getGalleryExportReceipts()])
-        .then(([nextJob, nextReceipts]) => {
-          setExportJob(nextJob);
-          setReceipts(nextReceipts);
-        })
-        .catch(() => undefined);
-    }, 1200);
+  };
+
+  const reviewShape = (productId: string) => {
+    const product = products.find((entry) => entry.id === productId);
+    if (product) { setActiveFamilyId(product.familyId); setReviewTarget(productId); }
   };
 
   return (
     <div className="galleryExportOverlay">
-      <section className="galleryExportWorkspace" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="gallery-export-title">
+      <section className="galleryExportWorkspace galleryWorkspaceV2" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="gallery-export-title">
         <header className="galleryExportHeader">
           <div className="galleryExportTitle">
             <PackageCheck size={19} aria-hidden="true" />
             <div>
               <h2 id="gallery-export-title">Gallery export</h2>
-              <p>Curate main and generated images for Shopify-ready ZIPs.</p>
+              <p>Select rugs, review their galleries, then export.</p>
             </div>
           </div>
           <div className="galleryExportHeaderMeta">
-            <span>{selectedFamilies.size} {selectedFamilies.size === 1 ? "family" : "families"}</span>
-            <span>{selectedProductIds.length} {selectedProductIds.length === 1 ? "shape" : "shapes"}</span>
-            <button ref={closeRef} type="button" onClick={onClose} disabled={jobRunning} aria-label="Close gallery export">
+            <button type="button" className="galleryHistoryButton" aria-expanded={showHistory} onClick={() => setShowHistory((value) => !value)}>Recent exports</button>
+            <button ref={closeRef} type="button" onClick={onClose} disabled={closeLocked} aria-label="Close gallery export">
               <X size={18} aria-hidden="true" />
             </button>
           </div>
@@ -396,193 +440,229 @@ export function GalleryExportWorkspace({
           <aside className="galleryFamilyPanel">
             <div className="galleryPanelHeading">
               <div>
-                <strong>Export scope</strong>
-                <span>Choose families and shapes</span>
+                <strong>Choose rugs</strong>
+                <span>Checkbox adds ready shapes</span>
               </div>
-              <button type="button" onClick={() => setSelectedFamilies(new Set(families.keys()))} disabled={workflowLocked}>All</button>
+              <button type="button" onClick={selectReady} disabled={workflowLocked} title="Add ready shapes from matching families">Select ready</button>
             </div>
-            <fieldset className="galleryShapeChecks">
-              <legend>Shapes</legend>
-              {SHAPES.map((shape) => (
-                <label key={shape}>
-                  <input type="checkbox" checked={selectedShapes.has(shape)} onChange={() => toggleShape(shape)} disabled={workflowLocked} />
-                  <span>{shape}</span>
-                </label>
-              ))}
-            </fieldset>
+            <div className="galleryFamilySearch">
+              <label htmlFor="gallery-family-search">Find a rug</label>
+              <input id="gallery-family-search" type="search" placeholder="Search rug families" value={search} onChange={(event) => setSearch(event.target.value)} />
+              <small>Green ready · yellow not ready · grey missing</small>
+            </div>
             <div className="galleryFamilyList" aria-label="Product families">
-              {[...families.entries()].map(([familyId, family]) => {
+              {filteredFamilies.map(([familyId, family]) => {
                 const representative = family.find((product) => product.shape === "area") ?? family[0];
-                const selected = selectedFamilies.has(familyId);
+                const selection = familySelectionState(family, selectedIds);
                 const active = activeFamilyId === familyId;
+                const selected = family.filter((product) => selectedIds.has(product.id));
+                const imageCount = selected.every((product) => gallerySummaries[product.id]) ? selected.reduce((sum, product) => sum + gallerySummaries[product.id].assetIds.length + 1, 0) : null;
                 return (
-                  <div className={`galleryFamilyRow ${active ? "isActive" : ""}`} key={familyId}>
+                  <div className={`galleryFamilyRow ${active ? "isActive" : ""} ${selection.count ? "isIncluded" : ""}`} key={familyId}>
                     <label>
-                      <input type="checkbox" checked={selected} onChange={() => toggleFamily(familyId)} aria-label={`Export ${representative.name}`} disabled={workflowLocked} />
+                      <input type="checkbox" checked={selection.checked} ref={(input) => { if (input) input.indeterminate = selection.mixed; }} aria-checked={selection.mixed ? "mixed" : selection.checked} onChange={() => toggleFamily(familyId)} aria-label={`Export ${representative.name}: ${selection.count} of ${selection.total} shapes selected`} disabled={workflowLocked || selection.total === 0} />
                     </label>
-                    <button type="button" onClick={() => chooseActiveFamily(familyId)} aria-current={active ? "true" : undefined} disabled={workflowLocked}>
-                      <span>{representative.name}</span>
-                      <small>{family.map((product) => product.shape).join(" · ")}</small>
+                    <button type="button" onClick={() => setActiveFamilyId(familyId)} aria-current={active ? "true" : undefined} aria-label={`Review ${representative.name} galleries`} aria-describedby={`gallery-family-status-${familyId}`}>
+                      <div className="galleryFamilyThumb">{representative.baseImage ? <img loading="lazy" src={thumbnailUrl(representative.id, "base", representative.baseImage)} alt="" /> : <ImageIcon size={18} />}</div>
+                      <div className="galleryFamilyCopy"><span>{representative.name}</span><small>{selected.length ? `${selected.map((product) => shapeLabel(product.shape)).join(" + ")}${imageCount === null ? " · counting…" : ` · ${imageCount} ${imageCount === 1 ? "image" : "images"}`}` : active ? "Viewing · not selected" : "Not selected"}</small></div>
+                      <FamilyShapeStatus products={family} familyName={representative.name} />
                     </button>
+                    {selectionNotice?.familyId === familyId ? <p className="galleryFamilyNotice" role="status">{selectionNotice.message}</p> : null}
+                    <span id={`gallery-family-status-${familyId}`} className="galleryVisuallyHidden">{SHAPES.map((shape) => { const product = family.find((entry) => entry.shape === shape); return `${shape}: ${product?.readinessError ? "readiness unavailable" : !product?.baseImage ? "missing" : product.exportReady ? "ready for export" : "not ready for export"}`; }).join(". ")}</span>
                   </div>
                 );
               })}
+              {filteredFamilies.length === 0 ? <p className="galleryExportHint">No rugs match this search. Your export selection is unchanged.</p> : null}
             </div>
           </aside>
 
           <main className="galleryCurationPanel">
             <div className="galleryCurationHeader">
               <div>
-                <h3>{activeFamilyId || "No family selected"}</h3>
+                <h3>{activeFamily.find((product) => product.shape === "area")?.name ?? activeFamily[0]?.name ?? "No family selected"}</h3>
+                <p>Images export in this order. Main stays first.</p>
               </div>
-              <div className="galleryShapeTabs" role="group" aria-label="Family shapes">
-                {SHAPES.map((shape) => {
-                  const product = activeFamily.find((candidate) => candidate.shape === shape);
-                  return (
-                    <button
-                      type="button"
-                      key={shape}
-                      className={activeProduct?.shape === shape ? "isActive" : ""}
-                      aria-pressed={activeProduct?.shape === shape}
-                      disabled={!product || workflowLocked}
-                      onClick={() => setActiveShape(shape)}
-                    >
-                      {shape}
-                    </button>
-                  );
-                })}
-              </div>
+              <FamilyShapeStatus products={activeFamily} familyName={activeFamilyId} />
             </div>
 
-            {loadingGallery ? (
-              <div className="galleryLoading"><LoaderCircle className="spin" size={20} /> Loading gallery</div>
-            ) : activeProduct ? (
-              <div className="galleryCurationScroll">
-                <div className="gallerySectionLabel">
-                  <div>
-                    <strong>Gallery order</strong>
-                    <span>Main image is locked at position 1</span>
-                  </div>
-                  {savingGallery ? <span className="gallerySaving"><LoaderCircle className="spin" size={12} /> Saving</span> : <span className="gallerySaved"><Check size={12} /> Saved</span>}
+            <div className="galleryCurationScroll">
+              {preflightIsCurrent && preflight && preflight.skippedCount > 0 && !exportJob ? <div className="galleryCheckIssues" ref={issueRef} tabIndex={-1} role="alert">
+                <strong>{preflight.skippedCount} {preflight.skippedCount === 1 ? "shape needs" : "shapes need"} attention</strong>
+                <p>{preflight.readyCount ? `${preflight.readyCount} valid ${preflight.readyCount === 1 ? "shape can" : "shapes can"} still export. Nothing has been downloaded yet.` : "No selected shapes passed the checks. Fix an issue or change your selection."}</p>
+                <PreflightResults preflight={preflight} onReview={reviewShape} />
+                <div className="galleryIssueActions">
+                  {preflight.readyCount > 0 ? <button className="galleryPrimaryButton" type="button" disabled={workflowLocked} onClick={() => {
+                    if (exportInFlightRef.current) return;
+                    exportInFlightRef.current = true;
+                    void buildExport(preflight).finally(() => { exportInFlightRef.current = false; });
+                  }}>Export {preflight.readyCount} valid {preflight.readyCount === 1 ? "shape" : "shapes"}</button> : null}
+                  <button className="gallerySecondaryButton" type="button" disabled={workflowLocked} onClick={() => reviewShape(preflight.shapes.find((shape) => shape.status === "skipped")!.productId)}>Go fix it</button>
                 </div>
-
-                <div className="galleryOrderedList">
-                  <GalleryMainRow product={activeProduct} />
-                  {gallery?.assetIds.map((assetId, index) => (
-                    <GalleryAssetRow
-                      key={assetId}
-                      product={activeProduct}
-                      asset={acceptedById.get(assetId) ?? null}
-                      assetId={assetId}
-                      position={index + 2}
-                      first={index === 0}
-                      last={index === gallery.assetIds.length - 1}
-                      disabled={workflowLocked}
-                      dragging={draggedAssetId === assetId}
-                      onDragStart={() => setDraggedAssetId(assetId)}
-                      onDragEnd={() => setDraggedAssetId(null)}
-                      onDrop={() => dropBefore(assetId)}
-                      onMove={(direction) => reorder(assetId, direction)}
-                      onRemove={() => void saveAssetIds(gallery.assetIds.filter((candidate) => candidate !== assetId))}
-                    />
-                  ))}
-                </div>
-
-                {gallery?.assetIds.length === 0 ? (
-                  <div className="galleryInlineNotice isBlocking"><XCircle size={15} /><span>Add at least one accepted generated image before export.</span></div>
-                ) : null}
-                {duplicateShots.map((duplicate) => (
-                  <div className="galleryInlineNotice isWarning" key={duplicate.shotId}>
-                    <AlertTriangle size={15} />
-                    <span>{duplicate.count} selected images use {duplicate.name}. This is allowed, but worth checking.</span>
-                  </div>
-                ))}
-
-                <div className="gallerySectionLabel galleryAvailableHeading">
-                  <div>
-                    <strong>Available accepted images</strong>
-                    <span>Removed images stay here and can be restored</span>
-                  </div>
-                  <span>{availableAssets.length}</span>
-                </div>
-                {availableAssets.length > 0 ? (
-                  <div className="galleryAvailableGrid">
-                    {availableAssets.map((asset) => (
-                      <button
-                        type="button"
-                        key={asset.assetId}
-                        onClick={() => gallery && void saveAssetIds([...gallery.assetIds, asset.assetId])}
-                        disabled={!gallery || workflowLocked}
-                      >
-                        <AssetThumb productId={activeProduct.id} asset={asset} />
-                        <span><strong>{asset.shotName}</strong><small>Attempt {asset.attempt}</small></span>
-                        <Plus size={15} aria-hidden="true" />
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="galleryAvailableEmpty"><ImageIcon size={18} /><span>No other accepted images for this shape.</span></div>
-                )}
-              </div>
-            ) : (
-              <div className="galleryLoading">Select a family to curate its gallery.</div>
-            )}
+              </div> : null}
+              {showHistory ? <section className="galleryHistory"><div className="galleryPanelHeading"><strong>Recent exports</strong><button type="button" onClick={() => setShowHistory(false)}>Close history</button></div><p>Receipts are kept. Downloaded ZIPs are removed.</p>
+                {receipts.length === 0 ? <p>No exports yet.</p> : receipts.slice(0, 8).map((receipt) => <article key={receipt.exportId}><strong>{receipt.includedShapes} shapes · {formatBytes(receipt.archiveBytes)}</strong><span>{formatDateTime(receipt.completedAt)} · {receipt.downloadedAt ? "Downloaded" : "Built"}{receipt.skippedShapes ? ` · ${receipt.skippedShapes} skipped` : ""}</span></article>)}
+              </section> : null}
+              {SHAPES.map((shape) => {
+                const product = activeFamily.find((candidate) => candidate.shape === shape);
+                return product && hasGalleryBase(product) ? (
+                  <ShapeGallery key={product.id} product={product} included={selectedIds.has(product.id)} disabled={workflowLocked}
+                    onToggle={() => toggleProduct(product.id)} onChange={galleryChanged}
+                    onSaving={(saving) => setSavingProducts((current) => { const next = new Set(current); if (saving) next.add(product.id); else next.delete(product.id); return next; })} />
+                ) : <section id={product ? `gallery-shape-${product.id}` : undefined} tabIndex={-1} className="galleryShapeSection isUnavailable" key={`${activeFamilyId}-${shape}`} aria-label={`${shape} gallery`}><div className="galleryShapeHeading"><h4>{shape}</h4><span>{product?.baseImage ? "Base needs attention" : "Shape missing — no main image"}</span><label><input type="checkbox" disabled /> Include in export</label></div></section>;
+              })}
+            </div>
           </main>
 
-          <aside className="galleryExportPanel">
-            <section className="galleryExportAction">
-              <div className="galleryPanelHeading">
-                <div><strong>Preflight & export</strong><span>Bad shapes will be skipped</span></div>
-                <ShieldCheck size={17} aria-hidden="true" />
-              </div>
-              <ScopeSummary products={products} productIds={selectedProductIds} />
-              {preflight ? <PreflightResults preflight={preflight} /> : (
-                <p className="galleryExportHint">Check geometry, acceptance, conversion, and coverage across {masterShots?.shots.length ?? 0} master shot types.</p>
-              )}
-              {exportJob ? <ExportProgress job={exportJob} /> : null}
-              {error ? <div className="galleryExportError" role="alert"><AlertTriangle size={14} /><span>{error}</span></div> : null}
-              <div className="galleryExportButtons">
-                <button className="gallerySecondaryButton" type="button" onClick={() => void runPreflight()} disabled={workflowLocked || selectedProductIds.length === 0}>
-                  {checking ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
-                  {preflight ? "Check again" : "Run preflight"}
-                </button>
-                {exportJob?.status === "ready" ? (
-                  <button className="galleryPrimaryButton" type="button" onClick={downloadExport}>
-                    <Download size={15} /> Download ZIP
-                  </button>
-                ) : (
-                  <button className="galleryPrimaryButton" type="button" onClick={() => void buildExport()} disabled={!preflightIsCurrent || !preflight || preflight.readyCount === 0 || workflowLocked}>
-                    {jobRunning || startingExport ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}
-                    {jobRunning || startingExport ? "Building ZIP" : "Build ZIP"}
-                  </button>
-                )}
-              </div>
-            </section>
-
-            <section className="galleryReceipts">
-              <div className="galleryPanelHeading">
-                <div><strong>Recent exports</strong><span>Receipts stay; ZIPs do not</span></div>
-                <span>{receipts.length}</span>
-              </div>
-              <div className="galleryReceiptList">
-                {receipts.slice(0, 8).map((receipt) => (
-                  <article key={receipt.exportId}>
-                    <PackageCheck size={15} aria-hidden="true" />
-                    <div>
-                      <strong>{receipt.includedShapes} {receipt.includedShapes === 1 ? "shape" : "shapes"}</strong>
-                      <span>{formatDateTime(receipt.completedAt)} · {formatBytes(receipt.archiveBytes)}</span>
-                      {receipt.skippedShapes ? <small>{receipt.skippedShapes} skipped</small> : null}
-                    </div>
-                    <span className={receipt.downloadedAt ? "isDone" : "isReady"}>{receipt.downloadedAt ? "Downloaded" : "Built"}</span>
-                  </article>
-                ))}
-                {receipts.length === 0 ? <p>No export receipts yet.</p> : null}
-              </div>
-            </section>
-          </aside>
         </div>
+        <footer className="galleryExportBar">
+          {showBreakdown ? <div className="galleryBatchBreakdown"><strong>Included in this download</strong>{selectedProductIds.length ? [...families.entries()].filter(([id]) => selectedFamilies.has(id)).map(([id, family]) => <button type="button" key={id} onClick={() => { setActiveFamilyId(id); setShowBreakdown(false); }}><strong>{family[0]?.name}</strong><span>{family.filter((product) => selectedIds.has(product.id)).map((product) => shapeLabel(product.shape)).join(" + ")}</span></button>) : <p>Check a rug or include a shape to start.</p>}</div> : null}
+          {error ? <div className="galleryExportError" role="alert"><AlertTriangle size={14} /><span>{error}</span></div> : null}
+          {unexpectedSkips.length > 0 ? <div className="galleryExportError" role="alert"><AlertTriangle size={14} /><span>Files changed during export. {unexpectedSkips.map((shape) => `${shape.familyId} ${shapeLabel(shape.shape)}`).join(", ")} were left out. Review them, or download the {exportJob?.receipt?.includedShapes} valid shapes below.</span></div> : null}
+          {preflightIsCurrent && preflight && (preflight.skippedCount === 0 || exportJob) && preflight.shapes.some((shape) => shape.issues.length > 0) ? <details className="galleryExportWarnings"><summary>{preflight.skippedCount ? `Export notes · ${preflight.skippedCount} skipped` : "Export notes (non-blocking)"}</summary><PreflightResults preflight={preflight} onReview={reviewShape} /></details> : null}
+          {exportJob ? <ExportProgress job={exportJob} /> : null}
+          <div className="galleryExportBarMain">
+            <div className="galleryBatchSummary"><button type="button" aria-expanded={showBreakdown} onClick={() => setShowBreakdown((value) => !value)}>{selectedFamilies.size} rugs · {selectedProductIds.length} shape galleries · {selectedImageCount === null ? "Counting images…" : `${selectedImageCount} images`}</button><span>{selectedProductIds.length ? "Checks run automatically. Originals + Shopify WebPs in one ZIP." : "Choose rugs on the left. Green shapes are included by default."}</span></div>
+            {selectedProductIds.length > 0 ? <button className="galleryTextButton" type="button" disabled={workflowLocked} onClick={() => setSelectedIds(new Set())}>Clear</button> : null}
+            {exportJob?.status === "ready" ? <button className="galleryPrimaryButton" type="button" onClick={downloadExport}><Download size={15} /> {unexpectedSkips.length ? "Download valid shapes" : "Download ZIP"}</button> : <button className={preflightIsCurrent && preflight?.skippedCount && !exportJob ? "gallerySecondaryButton" : "galleryPrimaryButton"} type="button" onClick={() => void exportSelected()} disabled={workflowLocked || selectedProductIds.length === 0}>
+              {workflowLocked ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}{jobRunning || startingExport ? "Preparing ZIP…" : checking ? "Checking images…" : savingProducts.size ? "Saving gallery…" : preflightIsCurrent && preflight?.skippedCount && !exportJob ? "Check again" : "Export selected"}
+            </button>}
+          </div>
+        </footer>
       </section>
     </div>
+  );
+}
+
+function ShapeGallery({ product, included, disabled, onToggle, onChange, onSaving }: {
+  product: ProductSummary;
+  included: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+  onChange: (gallery: GallerySelection, changed: boolean) => void;
+  onSaving: (saving: boolean) => void;
+}) {
+  const [gallery, setGallery] = useState<GallerySelection | null>(null);
+  const [generated, setGenerated] = useState<GeneratedResponse>(emptyGenerated);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [dragged, setDragged] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const galleryRef = useRef(gallery);
+  const savingRef = useRef(false);
+  const changeRef = useRef(onChange);
+  const sectionRef = useRef<HTMLElement>(null);
+  galleryRef.current = gallery;
+  changeRef.current = onChange;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void Promise.all([getGallerySelection(product.id), getGenerated(product.id)])
+      .then(([next, assets]) => {
+        if (cancelled) return;
+        const previousRevision = galleryRef.current?.revision;
+        setGallery(next);
+        setGenerated(assets);
+        changeRef.current(next, previousRevision !== undefined && previousRevision !== next.revision);
+      })
+      .catch((reason) => { if (!cancelled) setError(getErrorMessage(reason)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [product.id, product.galleryRevision, reload]);
+
+  const accepted = generated.active.filter((asset) => asset.status === "accepted" && asset.output && !UTILITY_SHOTS.has(asset.shotId) && !asset.inputs.shapeVariant);
+  const acceptedById = new Map(accepted.map((asset) => [asset.assetId, asset]));
+  const available = accepted.filter((asset) => !gallery?.assetIds.includes(asset.assetId));
+  const counts = new Map<string, { name: string; count: number }>();
+  for (const id of gallery?.assetIds ?? []) {
+    const asset = acceptedById.get(id);
+    if (asset) counts.set(asset.shotId, { name: asset.shotName, count: (counts.get(asset.shotId)?.count ?? 0) + 1 });
+  }
+  const locked = disabled || loading || saving || !gallery;
+  const save = async (assetIds: string[]) => {
+    if (!gallery || locked || savingRef.current || assetIds.join("\0") === gallery.assetIds.join("\0")) return;
+    savingRef.current = true;
+    setSaving(true);
+    onSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const next = await updateGallerySelection(product.id, assetIds, gallery.revision);
+      changeRef.current(next, true);
+      if (mounted.current) {
+        setGallery(next);
+        setNotice("Gallery changed — review and mark ready again.");
+        // Preserve focus if the activated remove/restore control disappeared.
+        window.requestAnimationFrame(() => {
+          if (document.activeElement === document.body) sectionRef.current?.focus();
+        });
+      }
+    } catch (reason) {
+      if (mounted.current) {
+        setError(`${getErrorMessage(reason)} Your latest saved gallery will be reloaded; try the change again.`);
+        setReload((current) => current + 1);
+      }
+    } finally {
+      savingRef.current = false;
+      onSaving(false);
+      if (mounted.current) setSaving(false);
+    }
+  };
+  const dropBefore = (target: string) => {
+    if (locked || !gallery || !dragged || dragged === target || !gallery.assetIds.includes(dragged)) return;
+    const next = gallery.assetIds.filter((id) => id !== dragged);
+    next.splice(next.indexOf(target), 0, dragged);
+    setDragged(null);
+    void save(next);
+  };
+  const ready = gallery?.exportReady ?? product.exportReady;
+  const markReadiness = async () => {
+    if (!gallery || locked || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    onSaving(true);
+    setError(null);
+    try {
+      const next = await updateGalleryReadiness(product.id, !ready, gallery.revision);
+      changeRef.current(next, true);
+      if (mounted.current) { setGallery(next); setNotice(next.exportReady ? "Gallery approved." : "Marked not ready."); }
+    } catch (reason) {
+      if (mounted.current) { setError(getErrorMessage(reason)); setReload((value) => value + 1); }
+    } finally {
+      savingRef.current = false;
+      onSaving(false);
+      if (mounted.current) setSaving(false);
+    }
+  };
+  return (
+    <section id={`gallery-shape-${product.id}`} ref={sectionRef} tabIndex={-1} className={`galleryShapeSection ${gallery?.assetIds.length === 0 ? "isBaseOnly" : ""}`} aria-label={`${product.shape} gallery`} aria-busy={loading || saving}>
+      <div className="galleryShapeHeading">
+        <div><h4>{product.shape}</h4><span className={ready ? "isReady" : "isNotReady"}>{loading ? "Loading review status…" : ready ? "Ready for export" : "Not ready for export"}</span>{gallery ? <small>{gallery.assetIds.length + 1} {gallery.assetIds.length === 0 ? "image" : "images"}</small> : null}</div>
+        <div className="galleryShapeControls"><button type="button" className={`galleryReadinessButton ${ready ? "isReady" : ""}`} aria-label={`Mark ${product.shape} ${ready ? "not ready" : "ready"}`} disabled={locked} onClick={() => void markReadiness()}>{ready ? "Mark not ready" : "Mark ready"}</button><label><input type="checkbox" checked={included} onChange={onToggle} disabled={locked} aria-label={`Include ${product.shape} in export`} /> {included ? "Included" : "Include in export"}</label></div>
+      </div>
+      {included && !ready && !loading ? <p className="galleryShapeWarning"><AlertTriangle size={13} /> Included, but not marked ready. Files will still be checked.</p> : null}
+      {error ? <div className="galleryInlineNotice isBlocking" role="alert"><XCircle size={14} /><span>{error}</span><button type="button" disabled={saving || loading} onClick={() => { setError(null); setReload((current) => current + 1); }}>Retry</button></div> : null}
+      {loading && !gallery ? <div className="galleryShapeLoading"><LoaderCircle className="spin" size={16} /> Loading {product.shape} gallery…</div> : gallery ? <>
+        <div className="gallerySectionLabel"><span>{gallery.assetIds.length === 0 ? "Base-only gallery — accepted generations are optional." : "Drag to reorder, or use the move buttons."}</span><span role="status">{saving ? "Saving…" : notice ?? "Saved"}</span></div>
+        <div className="galleryOrderedList">
+          <GalleryMainRow product={product} />
+          {gallery.assetIds.map((assetId, index) => <GalleryAssetRow key={assetId} product={product} asset={acceptedById.get(assetId) ?? null} assetId={assetId}
+            position={index + 2} first={index === 0} last={index === gallery.assetIds.length - 1} disabled={locked} dragging={dragged === assetId}
+            onDragStart={() => setDragged(assetId)} onDragEnd={() => setDragged(null)} onDrop={() => dropBefore(assetId)}
+            onMove={(direction) => void save(moveGalleryAsset(gallery.assetIds, assetId, direction))}
+            onRemove={() => void save(gallery.assetIds.filter((id) => id !== assetId))} />)}
+        </div>
+        {[...counts.entries()].filter(([, value]) => value.count > 1).map(([id, value]) => <div key={id} className="galleryInlineNotice isWarning"><AlertTriangle size={14} /><span>{value.count} selected images use {value.name}. Duplicates are allowed.</span></div>)}
+        {available.length > 0 ? <details className="galleryRestoreDisclosure">
+          <summary>Available accepted images ({available.length})</summary>
+          <p>Removed images stay here and can be restored.</p>
+          {available.length ? <div className="galleryAvailableGrid">{available.map((asset) => <button type="button" key={asset.assetId} disabled={locked} onClick={() => void save([...gallery.assetIds, asset.assetId])} aria-label={`Restore ${asset.shotName}, attempt ${asset.attempt}, to ${product.shape} gallery`}><AssetThumb productId={product.id} asset={asset} /><span><strong>{asset.shotName}</strong><small>Attempt {asset.attempt}</small></span><Plus size={15} /></button>)}</div> : <p>No other accepted images for this shape.</p>}
+        </details> : null}
+      </> : null}
+    </section>
   );
 }
 
@@ -653,22 +733,10 @@ function GalleryAssetRow({
 
 function AssetThumb({ productId, asset }: { productId: string; asset: AssetRecord }) {
   if (!asset.output?.file) return <XCircle size={18} />;
-  return <img src={thumbnailUrl(productId, "generated", asset.output.file)} alt="" />;
+  return <img loading="lazy" src={thumbnailUrl(productId, "generated", asset.output.file)} alt="" />;
 }
 
-function ScopeSummary({ products, productIds }: { products: ProductSummary[]; productIds: string[] }) {
-  const selected = new Set(productIds);
-  return (
-    <div className="galleryScopeSummary">
-      {SHAPES.map((shape) => {
-        const count = products.filter((product) => selected.has(product.id) && product.shape === shape).length;
-        return <span key={shape}><strong>{count}</strong>{shape}</span>;
-      })}
-    </div>
-  );
-}
-
-function PreflightResults({ preflight }: { preflight: GalleryPreflight }) {
+function PreflightResults({ preflight, onReview }: { preflight: GalleryPreflight; onReview: (productId: string) => void }) {
   return (
     <div className="galleryPreflightResults">
       <div className="galleryPreflightTotals">
@@ -676,7 +744,7 @@ function PreflightResults({ preflight }: { preflight: GalleryPreflight }) {
         <span className={preflight.skippedCount ? "isSkipped" : ""}><XCircle size={14} /> {preflight.skippedCount} skipped</span>
       </div>
       <div className="galleryPreflightShapes">
-        {preflight.shapes.map((shape) => {
+        {preflight.shapes.filter((shape) => shape.issues.length > 0).map((shape) => {
           const blockers = shape.issues.filter((candidate) => candidate.severity === "blocker");
           const warnings = shape.issues.filter((candidate) => candidate.severity === "warning");
           return (
@@ -689,6 +757,7 @@ function PreflightResults({ preflight }: { preflight: GalleryPreflight }) {
               {shape.issues.length > 0 ? (
                 <ul>{shape.issues.map((item, index) => <li className={`is-${item.severity}`} key={`${item.code}-${index}`}>{item.message}</li>)}</ul>
               ) : <p>Ready to export.</p>}
+              <button type="button" className="galleryTextButton" onClick={() => onReview(shape.productId)}>Review {shapeLabel(shape.shape)}</button>
             </details>
           );
         })}
@@ -701,11 +770,16 @@ function ExportProgress({ job }: { job: GalleryExportJob }) {
   const percent = job.progress.total > 0 ? Math.min(100, Math.round((job.progress.completed / job.progress.total) * 100)) : 0;
   return (
     <div className={`galleryJobProgress status-${job.status}`} aria-live="polite">
-      <div><strong>{job.status === "ready" ? "ZIP ready" : job.status === "downloaded" ? "Download complete" : job.status === "failed" ? "Export failed" : "Building export"}</strong><span>{job.progress.message}</span></div>
+      <div><strong>{job.status === "ready" ? "ZIP ready — download starting" : job.status === "downloaded" ? "Download complete" : job.status === "failed" ? "Export failed" : "Preparing your export"}</strong><span>{job.status === "ready" ? "If the download does not start, use Download ZIP." : job.progress.message}</span></div>
       {job.status === "building" || job.status === "queued" ? <><progress max={100} value={percent}>{percent}%</progress><small>{percent}% · {job.progress.completed}/{job.progress.total} files</small></> : null}
       {job.error ? <small className="isError">{job.error}</small> : null}
+      {job.receipt ? <small>{job.receipt.includedShapes} {job.receipt.includedShapes === 1 ? "shape exported" : "shapes exported"}{job.receipt.skippedShapes ? ` · ${job.receipt.skippedShapes} skipped` : ""}</small> : null}
     </div>
   );
+}
+
+function shapeLabel(shape: ProductShape) {
+  return shape[0].toUpperCase() + shape.slice(1);
 }
 
 function formatDateTime(value: string) {

@@ -267,12 +267,27 @@ export async function getGallerySelection(productId: string): Promise<GallerySel
   return unwrap<GallerySelection>(data, ["gallery"]);
 }
 
-export async function updateGallerySelection(productId: string, assetIds: string[]): Promise<GallerySelection> {
+export async function updateGallerySelection(productId: string, assetIds: string[], expectedRevision?: number): Promise<GallerySelection> {
   const data = await request<unknown>(productPath(productId, "/gallery"), {
     method: "PUT",
-    body: JSON.stringify({ assetIds })
+    body: JSON.stringify({ assetIds, expectedRevision })
   });
   return unwrap<GallerySelection>(data, ["gallery"]);
+}
+
+export async function updateGalleryReadiness(productId: string, exportReady: boolean, expectedRevision: number): Promise<GallerySelection> {
+  const data = await request<unknown>(productPath(productId, "/gallery/readiness"), {
+    method: "PATCH",
+    body: JSON.stringify({ exportReady, expectedRevision })
+  });
+  return unwrap<GallerySelection>(data, ["gallery"]);
+}
+
+export async function acceptAllDoneAssets(productId: string, assetIds: string[]) {
+  return request<{ gallery: GallerySelection; results: { assetId: string; status: "accepted" | "already_accepted" | "skipped"; reason?: string }[] }>(productPath(productId, "/generated/accept-all"), {
+    method: "POST",
+    body: JSON.stringify({ assetIds })
+  });
 }
 
 export async function preflightGalleryExport(productIds: string[]): Promise<GalleryPreflight> {
@@ -283,10 +298,10 @@ export async function preflightGalleryExport(productIds: string[]): Promise<Gall
   return unwrap<GalleryPreflight>(data, ["preflight"]);
 }
 
-export async function startGalleryExport(productIds: string[]): Promise<GalleryExportJob> {
+export async function startGalleryExport(productIds: string[], expectedFingerprints?: Record<string, string>): Promise<GalleryExportJob> {
   const data = await request<unknown>("/api/gallery-exports", {
     method: "POST",
-    body: JSON.stringify({ productIds })
+    body: JSON.stringify({ productIds, expectedFingerprints })
   });
   return unwrap<GalleryExportJob>(data, ["exportJob"]);
 }

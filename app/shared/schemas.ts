@@ -388,9 +388,19 @@ export const ShapeVariantShotsBatchRequestSchema = z.object({
 }).strict();
 
 export const GallerySelectionUpdateSchema = z.object({
+  expectedRevision: z.number().int().nonnegative().optional(),
   assetIds: z.array(z.string().trim().min(1).max(240)).max(100)
 }).strict();
 
 export const GalleryExportSelectionSchema = z.object({
+  expectedFingerprints: z.record(z.string().min(1).max(240), z.string().regex(/^[a-f0-9]{64}$/)).optional(),
   productIds: z.array(z.string().trim().min(1).max(240)).min(1).max(100)
+}).strict();
+
+export const GalleryReadinessUpdateSchema = z.object({
+  exportReady: z.boolean(), expectedRevision: z.number().int().nonnegative()
+}).strict();
+
+export const GalleryBulkAcceptSchema = z.object({
+  assetIds: z.array(z.string().trim().min(1).max(240)).min(1).max(100)
 }).strict();

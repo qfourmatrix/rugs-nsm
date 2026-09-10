@@ -209,7 +209,7 @@ function ShapeButton({
   disabled?: boolean;
   onClick: () => void;
 }) {
-  const statusLabel = status === "approved" ? "Ready" : status === "missing" ? "Create" : status.replaceAll("_", " ");
+  const statusLabel = status === "approved" ? "Base ready" : status === "missing" ? "Create" : status.replaceAll("_", " ");
   return (
     <button className={`shapeSwitchButton ${selected ? "isSelected" : ""}`} type="button" disabled={disabled} onClick={onClick}>
       {icon}

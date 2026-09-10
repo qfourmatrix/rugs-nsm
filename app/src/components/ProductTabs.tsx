@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type { ProductSummary } from "../../shared/types";
 import { thumbnailUrl } from "../api";
+import { FamilyShapeStatus } from "./FamilyShapeStatus";
 
 interface ProductTabsProps {
   products: ProductSummary[];
@@ -279,6 +280,7 @@ export function ProductTabs({
                   <span className="productRailName">{product.name}</span>
                   <span className={`productRailStatus status-${status.tone}`}>{status.label}</span>
                 </span>
+                <FamilyShapeStatus products={family} familyName={product.name} />
               </button>
             );
           })}
@@ -396,11 +398,7 @@ function ProductCard({
       <ProductThumbnail product={product} className="productBrowserCardImage" />
       <span className="productBrowserCardBody">
         <span className="productBrowserCardTitle">{product.name}</span>
-        <span className="productShapeAvailability">
-          {(["area", "runner", "round"] as const).map((shape) => (
-            <span className={family.some((candidate) => candidate.shape === shape) ? "isReady" : ""} key={shape}>{shape}</span>
-          ))}
-        </span>
+        <FamilyShapeStatus products={family} familyName={product.name} />
         <span className="productBrowserCardDate">Created {formatProductDate(product.createdAt)}</span>
         <span className="productBrowserCardMeta">
           <span>{product.counts.accepted} of {product.counts.totalShots} accepted</span>

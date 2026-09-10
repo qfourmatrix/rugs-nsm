@@ -1,4 +1,4 @@
-import { AlertTriangle, Circle, Eye, LayoutGrid, LoaderCircle, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, Check, Circle, Eye, LayoutGrid, LoaderCircle, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type {
   GeneratedResponse,
@@ -29,6 +29,9 @@ interface LeftPanelProps {
   onShowTrashChange: (value: boolean) => void;
   onSelectAsset: (assetId: string) => void;
   onAccept: (assetId: string) => void;
+  onAcceptAllDone: (assetIds: string[]) => void;
+  acceptingAll?: boolean;
+  reviewNotice?: string | null;
   onReject: (assetId: string) => void;
   onRetry: (assetId: string) => void;
   onCancelJob: (jobId: string) => void;
@@ -46,6 +49,9 @@ export function LeftPanel({
   onShowTrashChange,
   onSelectAsset,
   onAccept,
+  onAcceptAllDone,
+  acceptingAll = false,
+  reviewNotice,
   onReject,
   onRetry,
   onCancelJob
@@ -84,6 +90,7 @@ export function LeftPanel({
     [gridJobs, visibleAssets]
   );
   const visibleItems = displayItems.slice(0, visibleLimit);
+  const eligibleDoneIds = assets.filter((asset) => asset.productId === product?.id && isBulkAcceptEligible(asset)).map((asset) => asset.assetId);
 
   useEffect(() => {
     setVisibleLimit(INITIAL_VISIBLE_ATTEMPTS);
@@ -107,6 +114,11 @@ export function LeftPanel({
           </div>
 
           <div className="leftPanelTools">
+            <button className="acceptAllDone" type="button" disabled={actionDisabled || eligibleDoneIds.length === 0}
+              onClick={() => onAcceptAllDone(eligibleDoneIds)} title={`Accept finished ${product?.shape ?? "current shape"} shots only. Other shapes are unchanged.`}>
+              {acceptingAll ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
+              {acceptingAll ? "Accepting…" : `Accept all done (${eligibleDoneIds.length})`}
+            </button>
             <div className="gridPillGroup" aria-label="Grid columns">
               <LayoutGrid size={14} aria-hidden="true" />
               {gridColumnOptions.map((count) => (
@@ -134,6 +146,8 @@ export function LeftPanel({
             </label>
           </div>
         </div>
+
+        {reviewNotice ? <p className="studioReviewNotice" role="status">{reviewNotice}</p> : null}
 
         {product?.errors.length ? (
           <div className="inlineAlert">
@@ -195,6 +209,12 @@ export function LeftPanel({
       <JobLog jobs={jobs} onCancelJob={onCancelJob} />
     </aside>
   );
+}
+
+export function isBulkAcceptEligible(asset: LocatedAsset): boolean {
+  return asset.status === "done" && asset.location === "generated" && Boolean(asset.output?.file)
+    && !["refine_base", "shape_runner_base", "shape_round_base"].includes(asset.shotId)
+    && !asset.inputs.shapeVariant;
 }
 
 function isGridColumnCount(value: number): value is GridColumnCount {
