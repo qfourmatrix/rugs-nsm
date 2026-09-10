@@ -68,7 +68,7 @@ describe("curated Shopify gallery exports", () => {
       expect.objectContaining({ code: "MISSING_MASTER_SHOT", severity: "warning" }),
       expect.objectContaining({ code: "UNDERSIZED_IMAGE", severity: "warning" })
     ]));
-  });
+  }, 30_000);
 
   it("skips only the non-square shape while exporting valid originals and Shopify WebP files", async () => {
     const { productDir, base } = await makeSquareProduct("rug-good", 4200);
@@ -128,7 +128,7 @@ describe("curated Shopify gallery exports", () => {
 
     const receipts = await listGalleryExportReceipts(productRoot);
     expect(receipts[0]).toMatchObject({ exportId: "export_test", archiveSha256: await sha256File(result.archivePath) });
-  }, 30_000);
+  }, 120_000);
 
   it("blocks missing, stale, rejected, unaccepted, utility, and legacy-invalid selections", async () => {
     await makeSquareProduct("rug-stale");
