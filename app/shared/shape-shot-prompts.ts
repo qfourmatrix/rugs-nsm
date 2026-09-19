@@ -77,11 +77,11 @@ const RUNNER_DEFINITIONS: Record<string, ShapeShotDefinition> = {
       scene:
         "Shape-specific Runner wide lifestyle hero. Reconstruct the selected background faithfully as secondary room context; do not replace its architecture or furniture style. Use an existing clear circulation path, hallway axis, foyer lane, bedside passage, or open floor run that can physically accommodate the approved Runner. Keep furniture outside the Runner footprint and never invent a sofa, coffee table, dining table, or bed arrangement that conflicts with the selected room.",
       rug_placement:
-        "Lay the complete Runner flat along the room's clearest long circulation axis. Within the square output, compose its long body broadly across the lower or middle field, or on only a gentle diagonal, so both short ends and both long edges remain visible with a narrow believable floor margin. Preserve the approved Runner body ratio exactly. Do not tuck it under large furniture, place it wall-to-wall, bend it around a corner, or shorten it to fill the frame.",
+        "Lay the complete Runner straight along the room's long circulation axis, with its long edges parallel in world space to the passage walls and longitudinal floor seams. Never rotate the rug diagonally across the walking lane for composition. Show both short ends and both long edges with exposed floor margins. Preserve the approved body ratio; do not tuck it under furniture, place it wall-to-wall, bend it, or shorten it to fill the frame.",
       camera:
-        "Use a waist-to-chest-height interior product camera with a controlled 30-45 degree downward view and a natural 35-50mm full-frame lens feel. View the Runner from across one long side or a mild three-quarter angle, never directly end-on down its long axis. Keep vertical architecture controlled and avoid wide-angle stretching or strong foreshortening; the long-to-short proportion must remain easy to judge.",
+        "Offset three-quarter editorial room view with a gentle downward gaze and a natural 50mm lens feel. Stand to one side of the near short end and look across and along the Runner, rather than centering the camera on the corridor axis. The complete rug recedes diagonally within the picture because of the camera position, while remaining parallel to the passage in world space. Include all four corners and original fringe with comfortable floor margins, calm upright architecture above and beside the rug, and restrained room context in the upper half. No camera roll, exaggerated trapezoid, overhead view or ultrawide stretching. This shot profile, not the source room camera, controls framing.",
       lighting:
-        "Preserve the selected room's natural light direction and practical-light state. Use soft floor contact shadows along the long edges and short ends, readable pile direction, and even exposure across the full Runner without changing its colors or obscuring its perimeter.",
+        "Preserve the room's light direction and practical-light state. Window and object shadows continue coherently across floor and rug pile under one exposure and white balance. Use thin contact shadows immediately beneath resting edges and individual fringe strands, subtle floor-colored bounce, and readable pile without recoloring the design. No cutout halo, uniform drop shadow, floating edges, or independently lit rug.",
       styling:
         "Premium editorial interior catalogue photography. Keep the Runner the dominant product, use restrained room-faithful styling, maintain realistic walking clearances, and avoid clutter, props on the rug, or furniture overlap that hides the shape.",
       quality:
@@ -91,7 +91,8 @@ const RUNNER_DEFINITIONS: Record<string, ShapeShotDefinition> = {
     },
     validationChecks: [
       "Both short ends and both long edges are visible and the complete perimeter can be judged.",
-      "The camera looks across a long side or from a mild three-quarter angle rather than end-on.",
+      "The offset three-quarter camera gives the full rug a diagonal-in-frame presentation with room context above, not centered corridor symmetry.",
+      "The rug is parallel to the circulation axis, not rotated diagonally across it; exactly the reference's end-specific fringe or binding is retained.",
       "The Runner occupies a believable circulation path and remains clear of large furniture."
     ],
     rejectConditions: [
@@ -100,30 +101,32 @@ const RUNNER_DEFINITIONS: Record<string, ShapeShotDefinition> = {
     ]
   },
   high_angle_lifestyle: {
-    purpose: "Prove the Runner's complete long-format geometry and design rhythm from a high, natural lifestyle angle.",
+    purpose: "Show a high oblique cropped detail of the Runner's material, authentic short-end finish and adjacent long edge against the selected room floor.",
     override: {
+      crop_lock:
+        "RUNNER LIFESTYLE DETAIL CROP: intentionally show only a local short-end and adjacent long-edge region at real product scale. The long body continues beyond the frame. Do not fit the full Runner or complete design into this detail image. Cropping is a camera boundary, not a shortened or redesigned product.",
       scene:
-        "Shape-specific Runner high-angle lifestyle shot. Preserve the selected background faithfully and use its real hallway, foyer, bedside passage, galley transition, or longest open floor lane as secondary context. Do not redesign the room or add furniture that blocks the Runner.",
+        "Shape-specific Runner elevated material-and-edge lifestyle detail. Use the selected room's actual floor material and lighting, not a white studio or invented floor. Only rug and adjacent floor are visible; architecture and furnishings remain outside the crop. No secondary rugs or props.",
       rug_placement:
-        "Show the complete Runner flat with both short ends, both long edges, and all fringe or binding visible. In a square frame, place the long axis on a restrained corner-to-corner diagonal or across the widest usable floor span to maximize product scale while retaining a narrow floor margin. Keep the long sides straight and parallel in the manufactured rug; do not bow, taper, widen, or shorten the body.",
+        "Keep the physical Runner flat along the circulation axis, parallel in world space to the passage. Frame one authentic short-end treatment and an adjacent long edge, with visible floor beside them; the rest of the long body continues outside the frame. Preserve local pattern scale, border width, edge construction and end-specific fringe or binding. Do not rotate the product across the passage, shrink it to fit, or invent fringe on a bound end or long side.",
       camera:
-        "Use a standing-height 60-75 degree downward three-quarter view with a natural 45-70mm full-frame lens feel. Center the camera near the Runner's midpoint and rotate the composition rather than shooting from an end. Avoid ceiling-view flatness, extreme wide-angle distortion, and long-axis foreshortening.",
+        "High oblique cropped detail, approximately 60-70 degrees downward with a natural 65mm lens feel. Aim across one short-end-to-long-edge region so the rug runs diagonally through the picture. The visible short-end finish crosses the lower frame with floor breathing room below; the long body intentionally exits an upper or side boundary. Texture and edge contact dominate. No ceiling, walls, horizon, furniture or doorway in frame. This is not another full-rug hero, flat top-down scan or miniature rug. This shot profile overrides source-room framing instructions.",
       lighting:
-        "Use soft directional room light with restrained shadows that reveal pile and edge thickness while keeping every color region and the complete perimeter legible.",
+        "Preserve the selected room's light direction and practical-light state. Shadows continue naturally from floor onto pile with consistent softness and exposure; thin contact shadows ground edges and fringe. Reveal wool texture without excessive sharpening, cutout halos, floating edges, uniform drop shadows or product recoloring.",
       styling:
-        "Clean premium lifestyle product photography with minimal secondary furnishings at the outer frame only. Maintain clear walking space around the Runner and place no objects on it.",
+        "Premium editorial textile detail on the selected room floor. No furnishings in the crop, objects on the rug, added tassel groups, exaggerated fibers or unrelated floor textiles.",
       quality:
-        "Photorealistic high-angle Runner photograph with full-shape legibility, correct long-body perspective, precise pattern continuity, natural material texture, and no compositing artifacts.",
+        "Photorealistic high oblique material detail with accurate local pattern continuity, reference-faithful textile texture, believable floor contact and no compositing artifacts.",
       output_requirements:
-        "Deliver one complete approved Runner in a believable room, viewed high enough to verify the long silhouette and design continuity. Preserve the exact approved ratio and product identity; do not substitute, repeat, or crop the rug."
+        "Deliver a truthful cropped detail of exactly one approved Runner, not its full silhouette. Preserve the visible colors, motif scale, borders, material and end-specific fringe or binding from Image 1; unseen portions continue beyond the frame without compressing the design. Show authentic edge contact with the selected floor. Never add a distant mat or invent fringe."
     },
     validationChecks: [
-      "The full Runner fits at useful scale in the square frame, preferably across the broad field or on a restrained diagonal.",
-      "Long sides remain visually straight and both short-end treatments are readable.",
-      "The high angle reveals the complete design without flattening the image into an orthographic catalog cutout."
+      "The long body intentionally continues outside the crop at true product scale.",
+      "One authentic short-end finish and adjacent long edge are readable against the selected room floor.",
+      "The high oblique view shows only textile and floor, with coherent light and contact shadows."
     ],
     rejectConditions: [
-      "Reject an end-on composition, missing short end, exaggerated trapezoid, or near-square appearance.",
+      "Reject a full miniature Runner fitted into the detail frame, compressed complete design, fabricated edge, exaggerated trapezoid, or visible walls and ceiling.",
       "Reject props, shoes, furniture, or decor placed on the Runner."
     ]
   },

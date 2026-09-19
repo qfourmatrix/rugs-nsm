@@ -41,8 +41,8 @@ describe("shape-variant prompt engineering", () => {
 
   const expectedShotSignals: Record<"runner" | "round", Record<string, RegExp[]>> = {
     runner: {
-      wide_room_hero: [/both short ends/i, /30-45 degree/i, /never directly end-on/i],
-      high_angle_lifestyle: [/corner-to-corner diagonal/i, /60-75 degree/i, /both long edges/i],
+      wide_room_hero: [/both short ends/i, /offset three-quarter editorial/i, /gentle downward gaze/i],
+      high_angle_lifestyle: [/high oblique cropped detail/i, /No ceiling/i, /long body continues outside/i],
       studio_corner_detail: [/short-end-to-long-edge junction/i, /20-35 degree/i, /pure white/i],
       texture_macro: [/true local section/i, /80-120mm/i, /do not compress the full Runner design/i],
       folded_label_detail: [/one true short end/i, /sewn cloth label/i, /must not migrate to a long side/i]

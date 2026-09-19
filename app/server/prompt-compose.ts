@@ -83,6 +83,17 @@ export function sanitizeBackgroundPrompt(prompt: string) {
   );
 }
 
+// Runner room shots own framing. Do not re-inject full-rug/uncropped requirements
+// from analysis negatives, placement notes or legacy camera observations.
+export function runnerRoomScene(prompt: string) {
+  const sections = ["ROOM TYPE", "FLOOR", "WALLS", "WINDOWS AND NATURAL LIGHT", "ARTIFICIAL LIGHTING", "CEILING", "ANCHOR FURNITURE", "SECONDARY FURNITURE", "PROPS AND OBJECTS"];
+  const facts = sections.map((name) => {
+    const value = sectionValue(prompt, name);
+    return value ? `${name}: ${value}` : null;
+  }).filter((value): value is string => Boolean(value));
+  return facts.length >= 3 ? resolveBackgroundPlaceholders(facts.join("\n\n")) : sanitizeBackgroundPrompt(prompt);
+}
+
 function parseJsonPrompt(prompt: string): JsonPrompt | null {
   try {
     const parsed: unknown = JSON.parse(prompt);
@@ -173,6 +184,7 @@ export function composeGenerationPrompt({
   shapeContext?: ShapeShotContext | null;
 }) {
   const composed = normalizeJsonPrompt(prompt, construction);
+  const runnerRoom = shapeContext?.shape === "runner" && ["runner_wide_room_hero", "runner_high_angle_lifestyle"].includes(shapeContext.profile.id);
 
   if (backgroundTypeOverride) {
     Object.assign(composed, backgroundTypeOverride.override);
@@ -183,8 +195,18 @@ export function composeGenerationPrompt({
   }
 
   if (shapeContext) {
+    if (runnerRoom) {
+      // Old saved drafts can carry detail or full-outline locks outside the usual
+      // seven override fields. Product identity stays locked by the shared rules.
+      for (const key of ["crop_lock", "fold_geometry", "front_face", "back_face", "label_instruction", "fringe_tassel_lock", "edge_strip_lock", "label_placement", "label_geometry_lock", "forbidden_label_errors"]) delete composed[key];
+      composed.forbidden_changes = [...FORBIDDEN_RUG_CHANGES];
+    }
     if (shapeContext.customPromptActive) {
-      composed.operator_customization = {
+      composed.operator_customization = runnerRoom ? {
+        priority: "Only compatible lighting and styling edits are retained for Runner room shots. The current mandatory profile replaces saved camera, crop, placement and output instructions.",
+        requested_lighting: composed.lighting,
+        requested_styling: composed.styling
+      } : {
         priority: "Secondary to the mandatory shape profile. Honor these operator edits only where they do not conflict with product geometry, shot framing, room fidelity, label placement, or the validation checks below.",
         requested_scene: composed.scene,
         requested_rug_placement: composed.rug_placement,
@@ -214,11 +236,14 @@ export function composeGenerationPrompt({
   }
 
   if (background) {
-    const sanitizedBackground = sanitizeBackgroundPrompt(background.prompt);
+    const sanitizedBackground = runnerRoom ? runnerRoomScene(background.prompt) : sanitizeBackgroundPrompt(background.prompt);
     composed.background_context = {
       id: background.id,
       title: background.title,
       instruction:
+        runnerRoom
+          ? "Text-only secondary room context; no room reference image is attached. Use only architecture, furniture, materials and lighting. Room camera, placement and full-perimeter suggestions must not override the mandatory shot camera and crop. Keep the physical Runner parallel to circulation; camera position may put it diagonally in the picture. Omit all source rugs and mats. Ignore room-context rug design, color, material and suitability suggestions. Image 1 remains the only product identity reference. The detail shot shows only floor and textile; do not widen it to include described architecture."
+          :
         "Text-only secondary room context. Reconstruct the room from the selected background prompt; no room reference image is attached. Use this context for architecture, furniture, room materials, lighting, and camera guidance. Ignore room-context wording that suggests rug type, rug style, textile construction, product design, product colors, or product suitability. Image 1 remains the only product identity reference.",
       prompt: sanitizedBackground
     };
