@@ -65,7 +65,8 @@ import { JobLedger } from "./job-ledger";
 import { getExportReceipt, listExportReceiptPage } from "./export-receipt-index";
 import { composeGenerationPrompt } from "./prompt-compose";
 import { assertRetryBackgroundAllowed } from "./background-guard";
-import { parseLaoZhangImageResponse, buildLaoZhangRequest } from "./providers/laozhang";
+import { buildLaoZhangRequest } from "./providers/laozhang";
+import { requestLaoZhangImage } from "./providers/laozhang-transport";
 import { JobRegistry, selectGenerateMissingShots } from "./queue";
 import { compareProductsByCreatedAt, scanProducts, resolveProductImagePath } from "./scanner";
 import { getOrCreateBackgroundThumbnail, getOrCreateThumbnail, type ThumbnailKind } from "./thumbnails";
@@ -116,6 +117,7 @@ const jobs = new JobRegistry(undefined, record => jobLedger.put(record));
 const jobServerEpoch = Date.now().toString(36);
 const galleryExports = new GalleryExportRegistry(config.productRoot);
 const pending: Array<QueuedGeneration> = [];
+const activeGenerations = new Map<string, QueuedGeneration>();
 const activeAbortControllers = new Map<string, AbortController>();
 let activeCount = 0;
 installPerfTelemetry(app, config.providerMode, () => ({ queued: pending.length, active: activeCount,
@@ -124,7 +126,16 @@ installPerfTelemetry(app, config.providerMode, () => ({ queued: pending.length, 
 app.use(express.json({ limit: "100mb" }));
 const generationAdmission = new GenerationAdmission<QueuedGeneration>(jobLedger, batch => {
   if (pending.length + activeCount + batch.length > 1000) throw conflictError("GENERATION_QUEUE_FULL", "Generation queue limit reached. No jobs from this submission were started.");
-  for (const item of batch) if (jobs.hasRunning(item.productId, item.shot.id)) throw conflictError("JOB_ALREADY_RUNNING", "Another submission already started this shot. No jobs from this submission were started.");
+  for (const item of batch) if (!item.allowConcurrentShot && jobs.hasRunning(item.productId, item.shot.id)) throw conflictError("JOB_ALREADY_RUNNING", "Another submission already started this shot. No jobs from this submission were started.");
+  // Reserve distinct attempt numbers at synchronous admission, including jobs
+  // still waiting/running whose assets do not exist yet.
+  const reserved = [...pending, ...activeGenerations.values()];
+  for (const item of batch) {
+    for (const other of reserved) {
+      if (other.productId === item.productId && other.shot.id === item.shot.id) item.attempt = Math.max(item.attempt, other.attempt + 1);
+    }
+    reserved.push(item);
+  }
 }, batch => {
   for (const item of batch) jobs.addCommitted(item.job);
   pending.push(...batch);
@@ -137,6 +148,7 @@ const requestSweep = setInterval(() => {
 requestSweep.unref();
 
 interface QueuedGeneration {
+  allowConcurrentShot?: boolean;
   job: JobRecord;
   productId: string;
   shot: Shot;
@@ -399,7 +411,7 @@ async function productsWithCounts(productId?: string): Promise<ProductSummary[]>
           accepted: aggregateValues.filter((value) => value === "accepted").length,
           reviewNeeded: aggregateValues.filter((value) => value === "review_needed").length,
           failed: aggregateValues.filter((value) => value === "failed").length,
-          running: aggregateValues.filter((value) => value === "generating").length
+          running: jobs.all().filter(job => job.productId === product.id && (job.status === "queued" || job.status === "generating")).length
         }
       };
     })
@@ -677,7 +689,7 @@ async function latestRefineReference(productId: string) {
 }
 
 function enqueueGeneration(input: Omit<QueuedGeneration, "job"> & { runId: string; skipRunningCheck?: boolean }) {
-  if (!input.skipRunningCheck && jobs.hasRunning(input.productId, input.shot.id)) {
+  if (!input.allowConcurrentShot && !input.skipRunningCheck && jobs.hasRunning(input.productId, input.shot.id)) {
     throw conflictError("JOB_ALREADY_RUNNING", "A job is already queued or generating for this shot.");
   }
 
@@ -700,6 +712,7 @@ function enqueueGeneration(input: Omit<QueuedGeneration, "job"> & { runId: strin
 }
 
 function enqueueBatch(input: {
+  allowConcurrentShot?: boolean;
   runId: string;
   productId: string;
   shot: Shot;
@@ -715,7 +728,7 @@ function enqueueBatch(input: {
   sourceImage?: QueuedGeneration["sourceImage"];
   shapeVariant?: ShapeVariantDerivation | null;
 }) {
-  if (jobs.hasRunning(input.productId, input.shot.id)) {
+  if (!input.allowConcurrentShot && jobs.hasRunning(input.productId, input.shot.id)) {
     throw conflictError("JOB_ALREADY_RUNNING", `A job is already queued or generating for ${input.shot.name}.`);
   }
 
@@ -723,6 +736,7 @@ function enqueueBatch(input: {
   for (let index = 0; index < input.batchSize; index += 1) {
     jobIds.push(
       enqueueGeneration({
+        allowConcurrentShot: input.allowConcurrentShot,
         runId: input.runId,
         productId: input.productId,
         shot: input.shot,
@@ -758,11 +772,13 @@ async function drainQueue() {
       continue;
     }
     activeCount += 1;
+    activeGenerations.set(next.job.jobId, next);
     void runGeneration(next).catch((error) => {
       // Last-resort containment, including failures while recording an error.
       if (jobs.get(next.job.jobId)?.status !== "cancelled") jobs.update(next.job.jobId, { status: "failed", message: error instanceof Error ? error.message : "Job failed before completion." });
       console.error("Job failed during cleanup", error);
     }).finally(() => {
+      activeGenerations.delete(next.job.jobId);
       activeCount -= 1;
       void drainQueue();
     });
@@ -1101,26 +1117,12 @@ async function generateImage({
     imageSize,
     references
   });
-  const response = await fetch(config.laozhangEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.laozhangApiKey}`,
-      "x-goog-api-key": config.laozhangApiKey
-    },
-    body: JSON.stringify(body),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000)
+  const parsed = await requestLaoZhangImage({
+    endpoint: config.laozhangEndpoint,
+    apiKey: config.laozhangApiKey,
+    body,
+    signal
   });
-  const json = await response.json().catch(() => {
-    throw validationError("MALFORMED_PROVIDER_RESPONSE", "Provider returned malformed JSON.");
-  });
-
-  if (!response.ok) {
-    const code = response.status === 401 || response.status === 403 ? "AUTH_ERROR" : response.status === 429 ? "RATE_LIMIT" : "PROVIDER_ERROR";
-    throw validationError(code, `Provider returned HTTP ${response.status}.`, redactSecrets(json, [config.laozhangApiKey]));
-  }
-
-  const parsed = await parseLaoZhangImageResponse(json);
   return {
     data: Buffer.from(parsed.data, "base64"),
     mimeType: parsed.mimeType,
@@ -1935,6 +1937,7 @@ app.post(
     const prepared = await prepareGeneration({ productId, productShape: product.shape, shot, prompt: parsed.prompt, context: parsed.context });
     const runId = makeRunId();
     const jobIds = enqueueBatch({
+      allowConcurrentShot: true,
       runId,
       productId,
       shot,

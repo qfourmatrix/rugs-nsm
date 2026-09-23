@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_CONCURRENCY } from "../shared/constants";
 import type { ProductState } from "../shared/types";
 import { DEFAULT_SOS_CUSTOM_PALETTE } from "../shared/sos-palettes";
 import { AppError } from "./errors";
@@ -49,7 +50,7 @@ export function defaultProductState(productId: string, now = new Date()): Produc
     settings: {
       aspectRatio: "1:1",
       imageSize: "4K",
-      concurrency: 2,
+      concurrency: DEFAULT_CONCURRENCY,
       batchSize: 1
     }
   };

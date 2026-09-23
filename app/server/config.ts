@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
+import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY } from "../shared/constants";
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -9,7 +10,7 @@ dotenv.config();
 
 export type ProviderMode = "mock" | "laozhang";
 
-export const APP_QUEUE_CONCURRENCY = 3;
+export const APP_QUEUE_CONCURRENCY = DEFAULT_CONCURRENCY;
 
 export interface AppConfig {
   port: number;
@@ -39,7 +40,7 @@ function providerModeFromEnv(value: string | undefined): ProviderMode {
 }
 
 function clampConcurrency(value: number): number {
-  return Math.max(1, Math.min(3, value));
+  return Math.max(1, Math.min(MAX_CONCURRENCY, value));
 }
 
 function resolveProductRoot(value: string | undefined): string {

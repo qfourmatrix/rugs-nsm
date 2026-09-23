@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_CONCURRENCY } from "../shared/constants";
 import { DEFAULT_SOS_CUSTOM_PALETTE, SOS_PALETTE_IDS } from "../shared/sos-palettes";
 
 export const AspectRatioSchema = z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"]);
@@ -100,7 +101,7 @@ export const ProductStateSchema = z
       .object({
         aspectRatio: AspectRatioSchema,
         imageSize: ImageSizeSchema,
-        concurrency: z.number().int().min(1).max(3),
+        concurrency: z.number().int().min(1).max(MAX_CONCURRENCY),
         batchSize: z.number().int().min(1).max(4).default(1)
       })
       .strict()
@@ -133,7 +134,7 @@ export const ProductStatePatchSchema = z
       .object({
         aspectRatio: AspectRatioSchema.optional(),
         imageSize: ImageSizeSchema.optional(),
-        concurrency: z.number().int().min(1).max(3).optional(),
+        concurrency: z.number().int().min(1).max(MAX_CONCURRENCY).optional(),
         batchSize: z.number().int().min(1).max(4).optional()
       })
       .strict()
@@ -281,7 +282,7 @@ export const GenerateRequestSchema = z
 
 export const BulkRequestSchema = z
   .object({
-    concurrency: z.number().int().min(1).max(3).optional()
+    concurrency: z.number().int().min(1).max(MAX_CONCURRENCY).optional()
   })
   .strict()
   .optional();

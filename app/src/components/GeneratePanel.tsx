@@ -152,12 +152,11 @@ export function GeneratePanel({
   const contextNotice = [backgroundContextNotice, shapeContextNotice].filter(Boolean).join(" ") || null;
   const selectedAggregate = selectedShot ? aggregates[selectedShot.id] ?? "empty" : "empty";
   const promptReady = Boolean(productState?.promptBox.value.trim());
-  const selectedShotRunning = selectedShot ? runningShotIds.has(selectedShot.id) : false;
   const selectedRequirement = shotRequirementBlocker(selectedShot, product?.shape, productState, backgroundLibrary);
   const missingRequirement =
     missingShots.map((shot) => shotRequirementBlocker(shot, product?.shape, productState, backgroundLibrary)).find(Boolean) ?? null;
   const canGenerateSelected =
-    !busyAction && canGenerate && Boolean(selectedShot) && promptReady && !selectedShotRunning && !selectedRequirement;
+    !busyAction && !busyActions.has("generate") && canGenerate && Boolean(selectedShot) && promptReady && !selectedRequirement;
   const canGenerateMissing = !busyAction && !busyActions.has("generate-missing") && canGenerate && missingCount > 0 && !missingRequirement && !missingShots.some(shot => runningShotIds.has(shot.id));
   const selectedImageCount = selectedShot ? batchSize : 0;
   const readinessText = generationReadiness({
@@ -165,7 +164,6 @@ export function GeneratePanel({
     canGenerate,
     selectedShot,
     promptReady,
-    selectedShotRunning,
     selectedRequirement,
     busyAction,
     batchSize,
@@ -445,7 +443,6 @@ function generationReadiness({
   canGenerate,
   selectedShot,
   promptReady,
-  selectedShotRunning,
   selectedRequirement,
   busyAction,
   batchSize,
@@ -455,7 +452,6 @@ function generationReadiness({
   canGenerate: boolean;
   selectedShot: Shot | null;
   promptReady: boolean;
-  selectedShotRunning: boolean;
   selectedRequirement: string | null;
   busyAction: string | null;
   batchSize: number;
@@ -466,7 +462,6 @@ function generationReadiness({
   if (!canGenerate) return "Fix the product base image before generating.";
   if (!selectedShot) return "Load a shot to fill the prompt box.";
   if (!promptReady) return "Prompt is empty.";
-  if (selectedShotRunning) return `${selectedShot.name} is already queued or generating.`;
   if (selectedRequirement) return selectedRequirement;
   return `Uses current prompt, settings, base image, ${referenceCount} reference${referenceCount === 1 ? "" : "s"}, and batch x${batchSize}.`;
 }

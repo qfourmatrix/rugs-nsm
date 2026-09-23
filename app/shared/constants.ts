@@ -14,8 +14,8 @@ export const SUPPORTED_IMAGE_SIZES: ImageSize[] = ["1K", "2K", "4K"];
 
 export const DEFAULT_PRODUCT_ROOT = "../data/nsm100k";
 export const DEFAULT_PORT = 8787;
-export const DEFAULT_CONCURRENCY = 2;
-export const MAX_CONCURRENCY = 3;
+export const DEFAULT_CONCURRENCY = 12;
+export const MAX_CONCURRENCY = 12;
 export const BACKGROUND_REQUIRED_SHOT_IDS = ["wide_room_hero", "high_angle_lifestyle"] as const;
 export const LABEL_REQUIRED_SHOT_IDS = ["folded_label_detail"] as const;
 export const RUG_CONSTRUCTION_IDS = ["flatweave", "low_pile", "high_pile", "mixed_high_low", "unknown_custom"] as const;

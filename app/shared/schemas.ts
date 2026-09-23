@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   FORBIDDEN_RUG_CHANGES,
+  MAX_CONCURRENCY,
   RUG_CONSTRUCTION_IDS,
   RUG_PILE_MATERIAL_INSTRUCTION_TEMPLATE,
   RUG_REFERENCE_LOCK,
@@ -200,7 +201,7 @@ export const ProductStateSchema = z.object({
   settings: z.object({
     aspectRatio: AspectRatioSchema,
     imageSize: ImageSizeSchema,
-    concurrency: z.number().int().min(1).max(3),
+    concurrency: z.number().int().min(1).max(MAX_CONCURRENCY),
     batchSize: z.number().int().min(1).max(4).default(1)
   })
 });

@@ -78,10 +78,13 @@ function isObject(value: unknown): value is JsonObject {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, unchanged?: T): Promise<T> {
-  const intent = init.method === "POST" && isGenerationRoute(path)
+  const generation = init.method === "POST" && isGenerationRoute(path);
+  const intent = generation
     ? prepareGenerationIntent(window.localStorage, path, typeof init.body === "string" ? init.body : "null") : null;
   const timeout = new AbortController();
-  const timer = window.setTimeout(() => timeout.abort(), 120000);
+  // Generation submissions must not expire while the server is accepting them.
+  // Read/poll timeouts only refresh the UI; they never cancel background jobs.
+  const timer = generation ? undefined : window.setTimeout(() => timeout.abort(), 120000);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
   try {
   const response = await fetch(path, {
