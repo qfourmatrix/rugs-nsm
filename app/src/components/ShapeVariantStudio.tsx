@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -75,16 +75,21 @@ export function ShapeVariantStudio({
   onCatalogChanged: () => Promise<void>;
 }) {
   const [overview, setOverview] = useState<ShapeVariantsOverview>(EMPTY_OVERVIEW);
+  const overviewInFlight = useRef(false);
   const [workshop, setWorkshop] = useState<WorkshopTarget | null>(null);
   const [campaignOpen, setCampaignOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshOverview = useCallback(async () => {
+    if (overviewInFlight.current) return;
+    overviewInFlight.current = true;
     try {
       setOverview(await getShapeVariants());
       setError(null);
     } catch (nextError) {
       setError(getErrorMessage(nextError));
+    } finally {
+      overviewInFlight.current = false;
     }
   }, []);
 
@@ -95,7 +100,7 @@ export function ShapeVariantStudio({
   const hasActiveCampaign = overview.counts.queued + overview.counts.generating > 0;
   useEffect(() => {
     if (!hasActiveCampaign) return undefined;
-    const interval = window.setInterval(() => void refreshOverview(), 2500);
+    const interval = window.setInterval(() => { if (!document.hidden) void refreshOverview(); }, 2500);
     return () => window.clearInterval(interval);
   }, [hasActiveCampaign, refreshOverview]);
 
@@ -163,6 +168,7 @@ export function ShapeVariantStudio({
 
       {workshop ? (
         <ShapeWorkshop
+          key={`${workshop.sourceProductId}::${workshop.shape}`}
           target={workshop}
           source={products.find((product) => product.id === workshop.sourceProductId) ?? sourceProduct}
           record={overview.records.find((candidate) => candidate.id === `${workshop.sourceProductId}::${workshop.shape}`) ?? null}
@@ -245,8 +251,11 @@ function ShapeWorkshop({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approvalProductId, setApprovalProductId] = useState<string | null>(record?.status === "approved" ? record.variantProductId : null);
+  const detailInFlight = useRef(false);
 
   const loadDetail = useCallback(async () => {
+    if (detailInFlight.current) return;
+    detailInFlight.current = true;
     try {
       const detail = await getShapeVariant(`${target.sourceProductId}::${target.shape}`);
       setLiveRecord(detail.variant);
@@ -254,6 +263,8 @@ function ShapeWorkshop({
       setSelectedAssetId((current) => current && detail.variant.candidateAssetIds.includes(current) ? current : detail.variant.candidateAssetIds[0] ?? null);
     } catch (nextError) {
       if (record) setError(getErrorMessage(nextError));
+    } finally {
+      detailInFlight.current = false;
     }
   }, [record, target.shape, target.sourceProductId]);
 
@@ -264,7 +275,7 @@ function ShapeWorkshop({
   const running = liveRecord?.status === "queued" || liveRecord?.status === "generating";
   useEffect(() => {
     if (!running) return undefined;
-    const interval = window.setInterval(() => void loadDetail(), 2200);
+    const interval = window.setInterval(() => { if (!document.hidden) void loadDetail(); }, 2200);
     return () => window.clearInterval(interval);
   }, [loadDetail, running]);
 

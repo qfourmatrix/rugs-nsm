@@ -2,6 +2,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import express from "express";
 import sharp from "sharp";
+import { z } from "zod";
+import { GenerationAdmission } from "./generation-admission";
+import { installPerfTelemetry, recordMockCall } from "./perf-telemetry";
 import type {
   AssetRecord,
   AspectRatio,
@@ -43,6 +46,7 @@ import {
 } from "../shared/shape-variants";
 import {
   getBackgroundSnapshot,
+  getCachedBackgroundLibrary,
   getLabelLogoSnapshot,
   markBackgroundUsed,
   resolveProductLibraryPath,
@@ -52,12 +56,13 @@ import {
   setLabelLogoPath,
   toClientBackgroundLibraryState
 } from "./background-library";
-import { acceptAsset, buildAssetBasename, getAssetRecord, listGeneratedAssets, rejectAsset, saveAsset, writeOutputImage } from "./asset-store";
+import { acceptAsset, assetMetadataCacheStats, buildAssetBasename, generatedMetadataRevision, getAssetRecord, listGeneratedAssets, rejectAsset, saveAsset, writeOutputImage } from "./asset-store";
 import { config, clampQueueConcurrency } from "./config";
 import { asyncRoute, conflictError, errorMiddleware, notFoundError, validationError } from "./errors";
 import { ensureDir, imageMimeType, pathExists, safeChildPath, sha256File, SUPPORTED_IMAGE_EXTENSIONS } from "./fsUtils";
 import { loadMasterShots, saveMasterShots } from "./master-shots";
-import { loadPersistedJobs, savePersistedJobs } from "./job-store";
+import { JobLedger } from "./job-ledger";
+import { getExportReceipt, listExportReceiptPage } from "./export-receipt-index";
 import { composeGenerationPrompt } from "./prompt-compose";
 import { assertRetryBackgroundAllowed } from "./background-guard";
 import { parseLaoZhangImageResponse, buildLaoZhangRequest } from "./providers/laozhang";
@@ -106,17 +111,30 @@ const tinyPng = Buffer.from(
 const REFINE_SHOT_NAME = "Refine Base";
 
 const app = express();
-const jobs = new JobRegistry((records) => {
-  void savePersistedJobs(config.productRoot, records).catch((error) => {
-    console.error("Failed to persist job log", error);
-  });
-});
+const jobLedger = await JobLedger.open(config.productRoot);
+const jobs = new JobRegistry(undefined, record => jobLedger.put(record));
+const jobServerEpoch = Date.now().toString(36);
 const galleryExports = new GalleryExportRegistry(config.productRoot);
 const pending: Array<QueuedGeneration> = [];
 const activeAbortControllers = new Map<string, AbortController>();
 let activeCount = 0;
+installPerfTelemetry(app, config.providerMode, () => ({ queued: pending.length, active: activeCount,
+  retainedJobs: jobs.all().length, metadataCaches: assetMetadataCacheStats(), exports: galleryExports.retentionStats() }));
 
 app.use(express.json({ limit: "100mb" }));
+const generationAdmission = new GenerationAdmission<QueuedGeneration>(jobLedger, batch => {
+  if (pending.length + activeCount + batch.length > 1000) throw conflictError("GENERATION_QUEUE_FULL", "Generation queue limit reached. No jobs from this submission were started.");
+  for (const item of batch) if (jobs.hasRunning(item.productId, item.shot.id)) throw conflictError("JOB_ALREADY_RUNNING", "Another submission already started this shot. No jobs from this submission were started.");
+}, batch => {
+  for (const item of batch) jobs.addCommitted(item.job);
+  pending.push(...batch);
+  void drainQueue();
+});
+app.use(generationAdmission.middleware);
+const requestSweep = setInterval(() => {
+  try { jobLedger.sweepRequests(); } catch (error) { console.error("Request history cleanup failed", error); }
+}, 60 * 60 * 1000);
+requestSweep.unref();
 
 interface QueuedGeneration {
   job: JobRecord;
@@ -216,14 +234,16 @@ async function prepareGeneration({
   productId,
   productShape,
   shot,
-  prompt
+  prompt,
+  context
 }: {
   productId: string;
   productShape: ProductSummary["shape"];
   shot: Shot;
   prompt: string;
+  context?: { selectedBackgroundId: string | null; selectedConstructionId: string | null };
 }) {
-  const state = await loadProductState({ productRoot: config.productRoot, productId });
+  const state = context ?? await loadProductState({ productRoot: config.productRoot, productId });
   const construction = constructionSnapshotForId(state.selectedConstructionId);
   const background = requiresBackground(shot.id)
     ? await getBackgroundSnapshot({ productRoot: config.productRoot, backgroundId: state.selectedBackgroundId })
@@ -274,11 +294,12 @@ async function prepareGeneration({
   };
 }
 
-async function listProductGenerated(productId: string, includeRefineArtifacts = false) {
+async function listProductGenerated(productId: string, includeRefineArtifacts = false, compact = false) {
   const generated = await listGeneratedAssets({
     productRoot: config.productRoot,
     productId,
-    runtimeAggregates: runtimeAggregatesFor(productId)
+    runtimeAggregates: runtimeAggregatesFor(productId),
+    compact
   });
 
   return includeRefineArtifacts ? generated : hideShapeVariantGenerated(hideRefineGenerated(generated));
@@ -346,10 +367,10 @@ async function loadNormalizedProductState(productId: string) {
   });
 }
 
-async function productsWithCounts(): Promise<ProductSummary[]> {
+async function productsWithCounts(productId?: string): Promise<ProductSummary[]> {
   const masterShots = await loadMasterShots({ productRoot: config.productRoot });
-  const scan = await scanProducts({ productRoot: config.productRoot });
-  jobs.pruneTerminalJobsForProducts(new Set(scan.products.map((product) => product.id)));
+  const scan = await scanProducts({ productRoot: config.productRoot, productId });
+  if (productId === undefined) jobs.pruneTerminalJobsForProducts(new Set(scan.products.map((product) => product.id)));
 
   const products = await Promise.all(
     scan.products.map(async (product) => {
@@ -388,7 +409,7 @@ async function productsWithCounts(): Promise<ProductSummary[]> {
 }
 
 async function assertReadyProduct(productId: string) {
-  const products = await productsWithCounts();
+  const products = await productsWithCounts(productId);
   const product = products.find((candidate) => candidate.id === productId);
   if (!product) {
     throw notFoundError("UNKNOWN_PRODUCT", `Unknown product: ${productId}`);
@@ -465,6 +486,15 @@ async function enqueueShapeVariantRecord(record: ShapeVariantRecord) {
     current.completedCandidateCount = 0;
     current.lastError = null;
   });
+  generationAdmission.onRejected(async () => {
+    await updateShapeVariantRecord(config.productRoot, record.id, (current) => {
+      if (current.activeRunId === runId && current.status === "queued") {
+        current.status = current.candidateAssetIds.length ? "needs_review" : "failed";
+        current.activeRunId = null;
+        current.lastError = "Submission was rejected before dispatch. No jobs from this submission were started.";
+      }
+    });
+  });
 
   try {
     const jobIds = enqueueBatch({
@@ -495,7 +525,7 @@ async function enqueueShapeVariantRecord(record: ShapeVariantRecord) {
   }
 }
 
-async function resumeInterruptedShapeVariants() {
+async function reconcileInterruptedShapeVariants() {
   const campaign = await loadShapeVariantCampaign(config.productRoot);
   const interrupted = campaign.variants.filter(
     (record) => (record.status === "queued" || record.status === "generating") && record.activeRunId
@@ -543,27 +573,18 @@ async function resumeInterruptedShapeVariants() {
         continue;
       }
 
-      const shot = shapeShot(reconciled);
-      enqueueBatch({
-        runId: reconciled.activeRunId,
-        productId: reconciled.sourceProductId,
-        shot,
-        prompt: reconciled.prompt,
-        settings: { aspectRatio: "1:1", imageSize: reconciled.imageSize },
-        referenceImages: [],
-        background: null,
-        labelLogo: null,
-        construction: null,
-        parentAssetId: null,
-        batchSize: remaining,
-        attemptStart: nextAttemptForShot(allAssets, shot.id),
-        shapeVariant: shapeDerivation(reconciled, reconciled.activeRunId)
+      // Startup reconciles saved candidates only. An interrupted external call
+      // may already have incurred a charge; a new attempt needs user review.
+      await updateShapeVariantRecord(config.productRoot, reconciled.id, (record) => {
+        record.status = record.candidateAssetIds.length > 0 ? "needs_review" : "failed";
+        record.activeRunId = null;
+        record.lastError = "Interrupted by server restart. Saved candidates were preserved; remaining provider outcomes may be unknown. Review before generating again.";
       });
     } catch (error) {
       await updateShapeVariantRecord(config.productRoot, original.id, (record) => {
         record.status = "failed";
         record.activeRunId = null;
-        record.lastError = error instanceof Error ? `Could not resume interrupted generation: ${error.message}` : "Could not resume interrupted generation.";
+        record.lastError = error instanceof Error ? `Could not reconcile interrupted generation: ${error.message}` : "Could not reconcile interrupted generation.";
       }).catch(() => undefined);
     }
   }
@@ -594,7 +615,7 @@ async function uniqueProductId(name: string) {
 }
 
 async function assertKnownProduct(productId: string) {
-  const products = await productsWithCounts();
+  const products = await productsWithCounts(productId);
   const product = products.find((candidate) => candidate.id === productId);
   if (!product) {
     throw notFoundError("UNKNOWN_PRODUCT", `Unknown product: ${productId}`);
@@ -674,9 +695,7 @@ function enqueueGeneration(input: Omit<QueuedGeneration, "job"> & { runId: strin
     updatedAt: now,
     message: batchLabel("Queued", input)
   };
-  jobs.add(job);
-  pending.push({ ...input, job });
-  void drainQueue();
+  generationAdmission.stage({ ...input, job });
   return job.jobId;
 }
 
@@ -732,13 +751,18 @@ async function drainQueue() {
   while (activeCount < concurrency && pending.length > 0) {
     const next = pending.shift();
     if (!next) return;
-    const current = jobs.all().find((job) => job.jobId === next.job.jobId);
+    const current = jobs.get(next.job.jobId);
     if (current?.status === "cancelled") {
+      jobLedger.finishUndispatched(next.job.jobId);
       await noteShapeVariantCompletion(next, "cancelled");
       continue;
     }
     activeCount += 1;
-    void runGeneration(next).finally(() => {
+    void runGeneration(next).catch((error) => {
+      // Last-resort containment, including failures while recording an error.
+      if (jobs.get(next.job.jobId)?.status !== "cancelled") jobs.update(next.job.jobId, { status: "failed", message: error instanceof Error ? error.message : "Job failed before completion." });
+      console.error("Job failed during cleanup", error);
+    }).finally(() => {
       activeCount -= 1;
       void drainQueue();
     });
@@ -747,16 +771,20 @@ async function drainQueue() {
 
 async function runGeneration(item: QueuedGeneration) {
   jobs.update(item.job.jobId, { status: "generating", message: batchLabel("Generating", item) });
-  await noteShapeVariantStarted(item);
-  if (item.background) {
-    await markBackgroundUsed({ productRoot: config.productRoot, backgroundId: item.background.id });
-  }
   const abortController = new AbortController();
   activeAbortControllers.set(item.job.jobId, abortController);
   const started = Date.now();
   let baseInfo: AssetRecord["inputs"]["baseImage"] | null = null;
   let assetId: string | null = null;
   try {
+    await noteShapeVariantStarted(item);
+    if (item.background) {
+      await markBackgroundUsed({ productRoot: config.productRoot, backgroundId: item.background.id });
+    }
+    if (abortController.signal.aborted || jobs.get(item.job.jobId)?.status === "cancelled") {
+      await noteShapeVariantCompletion(item, "cancelled");
+      return;
+    }
     const productDir = path.join(config.productRoot, item.productId);
     const product = item.sourceImage ? null : await assertReadyProduct(item.productId);
     const basePath = item.sourceImage?.path ?? path.join(productDir, product?.baseImage as string);
@@ -799,6 +827,7 @@ async function runGeneration(item: QueuedGeneration) {
     const existing = await listGeneratedAssets({ productRoot: config.productRoot, productId: item.productId });
     const existingAssetIds = new Set([...existing.active, ...existing.trash].map((asset) => asset.assetId));
     assetId = buildAssetBasename({ shotId: item.shot.id, existingAssetIds });
+    jobLedger.markDispatch(item.job.jobId, "started");
     const image = await generateImage({
       prompt: item.prompt,
       basePath,
@@ -808,6 +837,9 @@ async function runGeneration(item: QueuedGeneration) {
       references: providerReferences,
       signal: abortController.signal
     });
+    // A returned image establishes a known provider outcome, even if a later
+    // local save fails or the user cancelled while the call was completing.
+    jobLedger.markDispatch(item.job.jobId, "finished");
     if (abortController.signal.aborted || jobs.get(item.job.jobId)?.status === "cancelled") {
       jobs.update(item.job.jobId, { status: "cancelled", message: "Cancelled." });
       await noteShapeVariantCompletion(item, "cancelled");
@@ -893,6 +925,7 @@ async function runGeneration(item: QueuedGeneration) {
     await noteShapeVariantCompletion(item, "failed", assetId, error);
   } finally {
     activeAbortControllers.delete(item.job.jobId);
+    jobLedger.finishUndispatched(item.job.jobId);
   }
 }
 
@@ -1042,6 +1075,7 @@ async function generateImage({
   signal?: AbortSignal;
 }): Promise<{ data: Buffer; mimeType: string; extension: string }> {
   if (config.providerMode === "mock") {
+    recordMockCall();
     await cancellableDelay(randomMockLatency(), signal);
     if (prompt.includes("[fail]")) {
       throw validationError("MOCK_FAILURE", "Mock provider failure triggered by prompt.");
@@ -1437,7 +1471,7 @@ app.post(
 app.get(
   "/api/background-library",
   asyncRoute(async (_req, res) => {
-    const library = await scanBackgroundLibrary({ productRoot: config.productRoot });
+    const library = await getCachedBackgroundLibrary({ productRoot: config.productRoot });
     res.json({ library: toClientBackgroundLibraryState(library) });
   })
 );
@@ -1556,6 +1590,10 @@ app.post(
   })
 );
 
+app.get("/api/gallery-exports", (_req, res) => {
+  res.json({ downloads: galleryExports.availableDownloads() });
+});
+
 app.post(
   "/api/gallery-exports",
   asyncRoute(async (req, res) => {
@@ -1573,9 +1611,15 @@ app.post(
 app.get(
   "/api/gallery-exports/:exportId",
   asyncRoute(async (req, res) => {
-    res.json({ exportJob: galleryExports.get(req.params.exportId as string) });
+    const exportJob = galleryExports.get(req.params.exportId as string);
+    if (exportJob.status === "downloaded") exportJob.receipt = await getExportReceipt(config.productRoot, exportJob.exportId);
+    res.json({ exportJob });
   })
 );
+
+app.post("/api/gallery-exports/:exportId/cancel", asyncRoute(async (req, res) => {
+  res.json({ exportJob: galleryExports.cancel(req.params.exportId as string) });
+}));
 
 app.get(
   "/api/gallery-exports/:exportId/download",
@@ -1600,6 +1644,18 @@ app.get(
     res.json({ receipts: await listGalleryExportReceipts(config.productRoot) });
   })
 );
+
+app.get("/api/gallery-export-receipts/page", asyncRoute(async (req, res) => {
+  if ((req.query.limit !== undefined && typeof req.query.limit !== "string") || (req.query.cursor !== undefined && typeof req.query.cursor !== "string")) throw validationError("INVALID_RECEIPT_QUERY", "Invalid export-history query.");
+  res.json(await listExportReceiptPage(config.productRoot, {
+    limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+    cursor: req.query.cursor as string | undefined
+  }));
+}));
+
+app.get("/api/gallery-export-receipts/:exportId", asyncRoute(async (req, res) => {
+  res.json({ receipt: await getExportReceipt(config.productRoot, req.params.exportId as string) });
+}));
 
 app.get(
   "/api/products/:productId/state",
@@ -1652,16 +1708,34 @@ app.get(
   "/api/products/:productId/generated",
   asyncRoute(async (req, res) => {
     const productId = req.params.productId as string;
-    const scan = await scanProducts({ productRoot: config.productRoot });
+    const scan = await scanProducts({ productRoot: config.productRoot, productId });
     const product = scan.products.find((candidate) => candidate.id === productId);
     if (!product) {
       throw notFoundError("UNKNOWN_PRODUCT", `Unknown product: ${productId}`);
     }
-    res.json({
-      generated: await listProductGenerated(productId, product.status === "missing_base")
-    });
+    const compact = req.query.compact === "1" && product.status === "ready";
+    const revision = () => generatedMetadataRevision(config.productRoot, productId,
+      JSON.stringify([jobServerEpoch, product.status, runtimeAggregatesFor(productId), compact]));
+    const before = await revision();
+    res.setHeader("Cache-Control", "private, no-cache");
+    if (req.get("If-None-Match") === before) { res.setHeader("ETag", before); res.status(304).end(); return; }
+    const generated = await listProductGenerated(productId, product.status === "missing_base", compact);
+    // A concurrent edit must not attach a reusable old revision to a changed body.
+    if (await revision() === before) res.setHeader("ETag", before);
+    res.json({ generated });
   })
 );
+
+app.get("/api/products/:productId/generated/:assetId", asyncRoute(async (req, res) => {
+  const productId = req.params.productId as string;
+  await assertKnownProduct(productId);
+  const found = await getAssetRecord({ productRoot: config.productRoot, productId, assetId: req.params.assetId as string });
+  if (req.query.preview === "1") {
+    res.json({ file: found.location === "generated" && found.asset.status !== "rejected" ? found.asset.output?.file ?? null : null });
+    return;
+  }
+  res.json({ asset: found.asset, location: found.location });
+}));
 
 app.post(
   "/api/products/:productId/refine-reference",
@@ -1799,7 +1873,7 @@ app.get(
   asyncRoute(async (req, res) => {
     const productId = req.params.productId as string;
     const filename = req.params.filename as string;
-    const scan = await scanProducts({ productRoot: config.productRoot });
+    const scan = await scanProducts({ productRoot: config.productRoot, productId });
     const filePath = await resolveProductImagePath({
       productRoot: config.productRoot,
       scan,
@@ -1822,7 +1896,7 @@ app.get(
       throw notFoundError("IMAGE_NOT_FOUND", "Thumbnail kind not found.");
     }
 
-    const scan = await scanProducts({ productRoot: config.productRoot });
+    const scan = await scanProducts({ productRoot: config.productRoot, productId });
     const sourcePath = await resolveProductImagePath({
       productRoot: config.productRoot,
       scan,
@@ -1839,7 +1913,8 @@ app.get(
       sourcePath
     });
 
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    // URL is stable when base.* is replaced; revalidate instead of showing a stale rug for a year.
+    res.setHeader("Cache-Control", "private, max-age=0, must-revalidate");
     res.sendFile(thumbnailPath ?? sourcePath, { dotfiles: "allow" });
   })
 );
@@ -1857,7 +1932,7 @@ app.post(
 
     const referenceImages = validateReferenceImages(product, parsed.referenceImages);
     const generated = await listProductGenerated(productId);
-    const prepared = await prepareGeneration({ productId, productShape: product.shape, shot, prompt: parsed.prompt });
+    const prepared = await prepareGeneration({ productId, productShape: product.shape, shot, prompt: parsed.prompt, context: parsed.context });
     const runId = makeRunId();
     const jobIds = enqueueBatch({
       runId,
@@ -1892,7 +1967,7 @@ app.post(
     const preparedShots = await Promise.all(
       selected.map(async (shot) => ({
         shot,
-        prepared: await prepareGeneration({ productId, productShape: product.shape, shot, prompt: shot.prompt })
+        prepared: await prepareGeneration({ productId, productShape: product.shape, shot, prompt: shot.prompt, context: parsed.context })
       }))
     );
     const jobIds = preparedShots.flatMap(({ shot, prepared }) =>
@@ -2065,8 +2140,34 @@ app.post(
   })
 );
 
-app.get("/api/jobs", (_req, res) => {
-  res.json({ jobs: jobs.all() });
+app.get("/api/jobs/revision", (_req, res) => {
+  res.json({ revision: `${jobServerEpoch}:${jobs.revision}` });
+});
+
+app.get("/api/generation-requests/status", (req, res, next) => {
+  try {
+    const query = z.object({ scope: z.string().max(2048), key: z.string().min(1).max(255) }).parse(req.query);
+    res.json(jobLedger.requestStatus(query.scope, query.key));
+  } catch (error) { next(error); }
+});
+
+app.get("/api/jobs", (req, res, next) => {
+  try {
+    const { productId } = z.object({ productId: z.string().optional() }).parse(req.query);
+    const active = jobs.all().filter(job => job.status === "queued" || job.status === "generating");
+    const recent = jobLedger.history({ productId, limit: 100 });
+    // Same bounded queue request also carries completions outside the selected shape.
+    const globalRecent = productId ? jobLedger.history({ limit: 100 }).jobs : [];
+    const combined = new Map([...globalRecent, ...recent.jobs, ...active].map(job => [job.jobId, job]));
+    res.json({ jobs: [...combined.values()], revision: jobs.revision, nextCursor: recent.nextCursor });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/jobs/history", (req, res, next) => {
+  try {
+    const query = z.object({ productId: z.string().optional(), before: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(100).default(100) }).parse(req.query);
+    res.json(jobLedger.history(query));
+  } catch (error) { next(error); }
 });
 
 app.post("/api/jobs/:jobId/cancel", (req, res) => {
@@ -2090,10 +2191,12 @@ await ensureDir(config.productRoot);
 await cleanupGalleryExportJobs(config.productRoot);
 await loadMasterShots({ productRoot: config.productRoot });
 await loadRefineSettings({ productRoot: config.productRoot });
-const persistedJobs = await loadPersistedJobs(config.productRoot);
-jobs.restore(persistedJobs);
-await savePersistedJobs(config.productRoot, jobs.all());
-await resumeInterruptedShapeVariants();
+// Never blindly resume external provider calls after a process interruption.
+jobLedger.transaction(() => {
+  for (const job of jobLedger.active()) jobLedger.put({ ...job, status: "cancelled", message: "Interrupted by server restart; provider outcome may be unknown. Review before retrying.", updatedAt: new Date().toISOString() });
+});
+jobs.restore(jobLedger.history({ limit: 500 }).jobs);
+await reconcileInterruptedShapeVariants();
 
 app.listen(config.port, "127.0.0.1", () => {
   console.log(`Product Shot Queue API listening on http://127.0.0.1:${config.port}`);

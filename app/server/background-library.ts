@@ -48,7 +48,45 @@ export interface LoadedBackgroundLibraryState extends Omit<BackgroundLibraryStat
 
 const stateDirname = ".product-shot-queue";
 const stateFilename = "background-library.json";
-const previewPathCache = new Map<string, Map<string, string>>();
+const libraryCache = new Map<string, { key: string; checkedAt: number; library: LoadedBackgroundLibraryState }>();
+const libraryLocks = new Map<string, Promise<unknown>>();
+async function withLibraryLock<T>(root: string, work: () => Promise<T>): Promise<T> {
+  const previous = libraryLocks.get(root) ?? Promise.resolve();
+  const task = previous.catch(() => undefined).then(work);
+  libraryLocks.set(root, task);
+  try { return await task; }
+  finally { if (libraryLocks.get(root) === task) libraryLocks.delete(root); }
+}
+
+async function libraryKey(productRoot: string, state: PersistedBackgroundState) {
+  const manifest = state.manifestPath ? await resolveProductLibraryPath(state.manifestPath, productRoot) : null;
+  const info = manifest ? await fs.stat(manifest, { bigint: true }).catch(() => null) : null;
+  return JSON.stringify([manifest, state.labelLogoPath, info ? `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}` : null]);
+}
+
+// Cheap reads validate manifest identity every time. Explicit Rescan bypasses this
+// cache; external prompt edits are refreshed within 10s, and generation reads its
+// selected prompt fresh regardless of cache age.
+export async function getCachedBackgroundLibrary({ productRoot }: { productRoot: string }) {
+  return withLibraryLock(productRoot, async () => {
+    const state = await loadPersisted(productRoot);
+    const key = await libraryKey(productRoot, state);
+    const cached = libraryCache.get(productRoot);
+    if (!cached || cached.key !== key || Date.now() - cached.checkedAt >= 10000) {
+      return scanBackgroundLibraryUnlocked({ productRoot });
+    }
+    const library = structuredClone(cached.library);
+    for (const background of library.backgrounds) {
+      const usage = state.usage[background.id];
+      background.status = usage ? "used" : "new";
+      background.usedAt = usage?.usedAt ?? null;
+      background.useCount = usage?.useCount ?? 0;
+    }
+    library.backgrounds.sort((a, b) => Number(a.status === "used") - Number(b.status === "used") || a.title.localeCompare(b.title));
+    library.labelLogoExists = library.labelLogoPath ? await pathExists(library.labelLogoPath) : false;
+    return library;
+  });
+}
 const runnerRoomShotIds = new Set<RunnerRoomShotId>(["wide_room_hero", "high_angle_lifestyle"]);
 const runnerBackgroundArchetypes = new Set<RunnerBackgroundArchetype>([
   "long_hallway_gallery",
@@ -272,10 +310,13 @@ export async function setBackgroundManifestPath({
   productRoot: string;
   manifestPath: string;
 }): Promise<LoadedBackgroundLibraryState> {
+  await withLibraryLock(productRoot, async () => {
   const state = await loadPersisted(productRoot);
   const resolvedPath = await resolveProductLibraryPath(manifestPath, productRoot, process.cwd());
   state.manifestPath = portablePathFromProductRoot(productRoot, resolvedPath);
   await savePersisted(productRoot, state);
+  libraryCache.delete(productRoot);
+  });
   return scanBackgroundLibrary({ productRoot });
 }
 
@@ -286,19 +327,30 @@ export async function setLabelLogoPath({
   productRoot: string;
   labelLogoPath: string;
 }): Promise<LoadedBackgroundLibraryState> {
+  await withLibraryLock(productRoot, async () => {
   const state = await loadPersisted(productRoot);
   const resolvedPath = await resolveProductLibraryPath(labelLogoPath, productRoot, process.cwd());
   state.labelLogoPath = portablePathFromProductRoot(productRoot, resolvedPath);
   await savePersisted(productRoot, state);
+  libraryCache.delete(productRoot);
+  });
   return scanBackgroundLibrary({ productRoot });
 }
 
 export async function scanBackgroundLibrary({
   productRoot
+}: { productRoot: string }): Promise<LoadedBackgroundLibraryState> {
+  return withLibraryLock(productRoot, () => scanBackgroundLibraryUnlocked({ productRoot }));
+}
+
+async function scanBackgroundLibraryUnlocked({
+  productRoot
 }: {
   productRoot: string;
 }): Promise<LoadedBackgroundLibraryState> {
   const state = await loadPersisted(productRoot);
+  const originalState = JSON.stringify(state);
+  const initialKey = await libraryKey(productRoot, state);
   const manifestPath = state.manifestPath
     ? await resolveProductLibraryPath(state.manifestPath, productRoot)
     : null;
@@ -347,7 +399,7 @@ export async function scanBackgroundLibrary({
         state.seen[entry.id] = {
           fingerprint,
           firstSeenAt: existing?.firstSeenAt ?? scannedAt,
-          lastSeenAt: scannedAt
+          lastSeenAt: existing?.fingerprint === fingerprint ? existing.lastSeenAt : scannedAt
         };
         const usage = state.usage[entry.id];
         const status: LoadedBackgroundRecord["status"] = usage ? "used" : "new";
@@ -355,7 +407,7 @@ export async function scanBackgroundLibrary({
           ...entry,
           fingerprint,
           firstSeenAt: state.seen[entry.id].firstSeenAt,
-          lastSeenAt: scannedAt,
+          lastSeenAt: state.seen[entry.id].lastSeenAt,
           usedAt: usage?.usedAt ?? null,
           useCount: usage?.useCount ?? 0,
           status
@@ -366,21 +418,13 @@ export async function scanBackgroundLibrary({
     }
   }
 
-  await savePersisted(productRoot, state);
+  if (JSON.stringify(state) !== originalState) await savePersisted(productRoot, state);
   backgrounds = backgrounds.sort((left, right) => {
     const rank = { new: 0, used: 1 };
     return rank[left.status] - rank[right.status] || left.title.localeCompare(right.title);
   });
-  previewPathCache.set(
-    productRoot,
-    new Map(
-      backgrounds.flatMap((background) =>
-        background.previewImagePath ? [[background.id, background.previewImagePath] as const] : []
-      )
-    )
-  );
 
-  return {
+  const library: LoadedBackgroundLibraryState = {
     manifestPath,
     manifestMtimeMs,
     manifestSha256,
@@ -390,6 +434,11 @@ export async function scanBackgroundLibrary({
     backgrounds,
     errors
   };
+  if (errors.length === 0 && initialKey === await libraryKey(productRoot, state)) {
+    if (libraryCache.size >= 8) libraryCache.delete(libraryCache.keys().next().value!);
+    libraryCache.set(productRoot, { key: await libraryKey(productRoot, state), checkedAt: Date.now(), library: structuredClone(library) });
+  } else libraryCache.delete(productRoot);
+  return library;
 }
 
 export function toClientBackgroundLibraryState(library: LoadedBackgroundLibraryState): BackgroundLibraryState {
@@ -407,7 +456,8 @@ export async function getBackgroundSnapshot({
   backgroundId: string | null;
 }): Promise<GenerationBackgroundSnapshot | null> {
   if (!backgroundId) return null;
-  const library = await scanBackgroundLibrary({ productRoot });
+  const library = await getCachedBackgroundLibrary({ productRoot });
+  if (library.errors.length) throw validationError("INVALID_BACKGROUND_MANIFEST", library.errors.join("; "));
   const background = library.backgrounds.find((item) => item.id === backgroundId);
   if (!background) {
     throw validationError("UNKNOWN_BACKGROUND", `Unknown background: ${backgroundId}.`);
@@ -416,7 +466,10 @@ export async function getBackgroundSnapshot({
     id: background.id,
     type: background.type,
     title: background.title,
-    prompt: background.prompt,
+    prompt: background.promptPath ? await fs.readFile(background.promptPath, "utf8").then(text => {
+      if (!text.trim()) throw validationError("INVALID_BACKGROUND_MANIFEST", "Selected background prompt is empty.");
+      return text.trim();
+    }) : background.prompt,
     previewImagePath: background.previewImagePath
       ? portablePathFromProductRoot(productRoot, background.previewImagePath)
       : null,
@@ -434,6 +487,7 @@ export async function markBackgroundUsed({
   backgroundId: string;
   now?: string;
 }) {
+  return withLibraryLock(productRoot, async () => {
   const state = await loadPersisted(productRoot);
   const current = state.usage[backgroundId];
   state.usage[backgroundId] = {
@@ -441,6 +495,7 @@ export async function markBackgroundUsed({
     useCount: (current?.useCount ?? 0) + 1
   };
   await savePersisted(productRoot, state);
+  });
 }
 
 export async function getLabelLogoSnapshot({
@@ -455,7 +510,6 @@ export async function getLabelLogoSnapshot({
   if (labelLogoPath) {
     state.labelLogoPath = portablePathFromProductRoot(productRoot, labelLogoPath);
   }
-  await savePersisted(productRoot, state);
   if (!labelLogoPath) return null;
   if (!(await pathExists(labelLogoPath))) return null;
   return {
@@ -473,12 +527,8 @@ export async function resolveBackgroundPreviewPath({
   productRoot: string;
   backgroundId: string;
 }) {
-  const cachedPath = previewPathCache.get(productRoot)?.get(backgroundId);
-  if (cachedPath && await pathExists(cachedPath)) {
-    return cachedPath;
-  }
-
-  const library = await scanBackgroundLibrary({ productRoot });
+  const library = await getCachedBackgroundLibrary({ productRoot });
+  if (library.errors.length) throw validationError("INVALID_BACKGROUND_MANIFEST", library.errors.join("; "));
   const background = library.backgrounds.find((item) => item.id === backgroundId);
   if (!background?.previewImagePath) {
     throw validationError("BACKGROUND_PREVIEW_MISSING", "Background preview image is missing.");

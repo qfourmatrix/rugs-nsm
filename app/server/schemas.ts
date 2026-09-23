@@ -74,6 +74,7 @@ export const MasterShotsSchema = z
 
 export const ProductStateSchema = z
   .object({
+    revision: z.number().int().nonnegative().default(0),
     version: z.literal(1),
     productId: z.string(),
     createdAt: z.string().datetime(),

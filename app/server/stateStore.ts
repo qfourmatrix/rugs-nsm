@@ -11,12 +11,22 @@ export interface ProductStateTarget {
   dirPath: string;
 }
 
+const stateLocks = new Map<string, Promise<unknown>>();
+async function withStateLock<T>(product: ProductStateTarget, action: () => Promise<T>): Promise<T> {
+  const key = productStatePath(product);
+  const task = (stateLocks.get(key) ?? Promise.resolve()).catch(() => undefined).then(action);
+  stateLocks.set(key, task);
+  try { return await task; }
+  finally { if (stateLocks.get(key) === task) stateLocks.delete(key); }
+}
+
 export function productStatePath(product: ProductStateTarget): string {
   return path.join(product.dirPath, "product-state.json");
 }
 
 export function defaultProductState(productId: string, now = new Date()): ProductState {
   return {
+    revision: 0,
     version: 1,
     productId,
     createdAt: now.toISOString(),
@@ -50,11 +60,15 @@ export async function ensureProductState(product: ProductStateTarget): Promise<v
   if (!(await pathExists(filePath))) {
     await atomicWriteJson(filePath, defaultProductState(product.id, await productCreatedAt(product.dirPath)), {
       overwrite: false
-    });
+    }).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
   }
 }
 
 export async function loadProductState(product: ProductStateTarget): Promise<ProductState> {
+  return withStateLock(product, () => loadProductStateUnlocked(product));
+}
+
+async function loadProductStateUnlocked(product: ProductStateTarget): Promise<ProductState> {
   await ensureProductState(product);
   const filePath = productStatePath(product);
   let raw: unknown;
@@ -107,6 +121,7 @@ export async function loadProductState(product: ProductStateTarget): Promise<Pro
 }
 
 export async function saveProductState(product: ProductStateTarget, state: ProductState): Promise<ProductState> {
+  return withStateLock(product, async () => {
   const parsed = ProductStateSchema.safeParse({ ...state, productId: product.id });
   if (!parsed.success) {
     throw new AppError(
@@ -117,8 +132,14 @@ export async function saveProductState(product: ProductStateTarget, state: Produ
     );
   }
 
-  await atomicWriteJson(productStatePath(product), parsed.data);
-  return parsed.data;
+  const current = await loadProductStateUnlocked(product);
+  if ((state.revision ?? 0) !== (current.revision ?? 0)) {
+    throw new AppError(409, "PRODUCT_STATE_CONFLICT", "This rug was changed in another tab or request. Your draft was not saved. Reload and review the latest settings before saving again.");
+  }
+  const saved = { ...parsed.data, revision: (current.revision ?? 0) + 1 };
+  await atomicWriteJson(productStatePath(product), saved);
+  return saved;
+  });
 }
 
 async function productCreatedAt(dirPath: string): Promise<Date> {

@@ -38,6 +38,27 @@ function selectedShotIds(value: unknown): string[] {
 }
 
 describe("queue selection rules", () => {
+  it("keeps active jobs regardless of age while bounding terminal history", async () => {
+    const { JobRegistry } = await import("../server/queue");
+    const persisted = new Map<string, JobRecord>();
+    const registry = new JobRegistry(undefined, job => persisted.set(job.jobId, job));
+    registry.add(makeJob({ jobId: "old-active", status: "generating", createdAt: "2020-01-01T00:00:00.000Z" }));
+    for (let index = 0; index < 1000; index++) registry.add(makeJob({ jobId: `done-${index}`, status: "succeeded", createdAt: new Date(1700000000000 + index).toISOString() }));
+    expect(registry.all()).toHaveLength(501);
+    expect(registry.get("old-active")?.status).toBe("generating");
+    expect(registry.hasRunning("SKU-001", "hero")).toBe(true);
+    expect(persisted.size).toBe(1001);
+    expect(registry.get("done-0")).toBeNull();
+    expect(registry.get("done-999")).not.toBeNull();
+  });
+
+  it("does not accept or change a job when durable persistence fails", async () => {
+    const { JobRegistry } = await import("../server/queue");
+    const registry = new JobRegistry(undefined, () => { throw new Error("disk full"); });
+    expect(() => registry.add(makeJob({}))).toThrow("disk full");
+    expect(registry.all()).toEqual([]);
+  });
+
   it("Generate Missing enqueues only empty shots and skips anti-loop states", async () => {
     const shots = [
       makeShot({ id: "hero" }),

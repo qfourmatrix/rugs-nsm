@@ -37,21 +37,30 @@ export function mimeForImage(filename: string) {
   return imageMime(filename);
 }
 
-export async function scanProducts({ productRoot }: { productRoot: string }): Promise<ScanResult> {
+export async function scanProducts({ productRoot, productId }: { productRoot: string; productId?: string }): Promise<ScanResult> {
   await ensureProductRoot({ productRoot });
-  const entries = await readdir(productRoot, { withFileTypes: true });
+  // Image and selected-product requests must never enumerate unrelated products.
+  if (productId !== undefined) assertSafeBasename(productId);
+  const entries = productId === undefined ? await readdir(productRoot, { withFileTypes: true }) :
+    await lstat(path.join(productRoot, productId)).then(info => [{ name: productId, isDirectory: () => info.isDirectory() && !info.isSymbolicLink() }]).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
   const products: ProductSummary[] = [];
   const productDirs = new Map<string, string>();
 
-  for (const entry of entries) {
+  // Bounded parallel directory reads: avoid serial disk latency without flooding
+  // the filesystem when a large catalog is rescanned.
+  for (let offset = 0; offset < entries.length; offset += 8) {
+    await Promise.all(entries.slice(offset, offset + 8).map(async (entry) => {
     if (!entry.isDirectory() || entry.name.startsWith(".")) {
-      continue;
+      return;
     }
 
     const productDir = path.join(productRoot, entry.name);
     const linkInfo = await lstat(productDir);
     if (linkInfo.isSymbolicLink()) {
-      continue;
+      return;
     }
 
     const files = await readdir(productDir, { withFileTypes: true });
@@ -113,6 +122,7 @@ export async function scanProducts({ productRoot }: { productRoot: string }): Pr
       errors
     });
     productDirs.set(entry.name, productDir);
+    }));
   }
 
   products.sort(compareProductsByCreatedAt);

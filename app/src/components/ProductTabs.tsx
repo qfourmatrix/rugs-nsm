@@ -28,6 +28,7 @@ interface ProductTabsProps {
   selectedProductId: string | null;
   search: string;
   loading: boolean;
+  navigationLoading?: boolean;
   onSearchChange: (value: string) => void;
   onSelectProduct: (productId: string) => void;
   onRescan: () => void;
@@ -56,6 +57,7 @@ export function ProductTabs({
   selectedProductId,
   search,
   loading,
+  navigationLoading = loading,
   onSearchChange,
   onSelectProduct,
   onRescan,
@@ -201,7 +203,7 @@ export function ProductTabs({
               className="topbarIconButton"
               type="button"
               onClick={() => previousProduct && selectFamily(previousProduct)}
-              disabled={!previousProduct || loading}
+              disabled={!previousProduct || navigationLoading}
               aria-label={previousProduct ? `Previous product: ${previousProduct.name}` : "No previous product"}
               title={previousProduct?.name ?? "No previous product"}
             >
@@ -211,7 +213,7 @@ export function ProductTabs({
               className="topbarIconButton"
               type="button"
               onClick={() => nextProduct && selectFamily(nextProduct)}
-              disabled={!nextProduct || loading}
+              disabled={!nextProduct || navigationLoading}
               aria-label={nextProduct ? `Next product: ${nextProduct.name}` : "No next product"}
               title={nextProduct?.name ?? "No next product"}
             >

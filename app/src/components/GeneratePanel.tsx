@@ -66,6 +66,7 @@ interface GeneratePanelProps {
   jobs: JobRecord[];
   savingState: boolean;
   busyAction: string | null;
+  busyActions: ReadonlySet<string>;
   runningShotIds: Set<string>;
   onLoadShot: (shot: Shot) => void;
   onPromptChange: (value: string) => void;
@@ -92,6 +93,7 @@ export function GeneratePanel({
   jobs,
   savingState,
   busyAction,
+  busyActions,
   runningShotIds,
   onLoadShot,
   onPromptChange,
@@ -156,7 +158,7 @@ export function GeneratePanel({
     missingShots.map((shot) => shotRequirementBlocker(shot, product?.shape, productState, backgroundLibrary)).find(Boolean) ?? null;
   const canGenerateSelected =
     !busyAction && canGenerate && Boolean(selectedShot) && promptReady && !selectedShotRunning && !selectedRequirement;
-  const canGenerateMissing = !busyAction && canGenerate && missingCount > 0 && !missingRequirement;
+  const canGenerateMissing = !busyAction && !busyActions.has("generate-missing") && canGenerate && missingCount > 0 && !missingRequirement && !missingShots.some(shot => runningShotIds.has(shot.id));
   const selectedImageCount = selectedShot ? batchSize : 0;
   const readinessText = generationReadiness({
     product,
@@ -194,7 +196,7 @@ export function GeneratePanel({
           <button
             className="controlButton"
             type="button"
-            disabled={Boolean(busyAction) || !canGenerate || failedShots.length === 0}
+            disabled={Boolean(busyAction) || busyActions.has("retry-failed") || !canGenerate || failedShots.length === 0 || failedShots.some(shot => runningShotIds.has(shot.id))}
             onClick={() => onRetryFailed(undefined, failedShots.length)}
           >
             <RotateCcw size={15} />
@@ -203,7 +205,7 @@ export function GeneratePanel({
           <button
             className="controlButton"
             type="button"
-            disabled={Boolean(busyAction) || activeJobs.length === 0}
+            disabled={busyActions.has("cancel-active") || activeJobs.length === 0}
             onClick={onCancelPending}
           >
             <Ban size={15} />
@@ -277,7 +279,7 @@ export function GeneratePanel({
             library={backgroundLibrary}
             selectedBackground={selectedBackground}
             selectedBackgroundId={productState?.selectedBackgroundId ?? null}
-            disabled={Boolean(busyAction) || !productState}
+            disabled={Boolean(busyAction) || ["background-library", "rescan-backgrounds", "label-logo"].some(label => busyActions.has(label)) || !productState}
             onManifestSave={onBackgroundManifestSave}
             onRescan={onBackgroundLibraryRescan}
             onLabelLogoSave={onLabelLogoSave}
@@ -290,7 +292,7 @@ export function GeneratePanel({
               productShape={product.shape}
               masterShots={masterShots}
               productState={productState}
-              busyAction={busyAction}
+              busyAction={busyAction ?? (busyActions.has("save-master-shots") ? "save-master-shots" : null)}
               canGenerate={canGenerate}
               aggregates={aggregates}
               onLoadShot={onLoadShot}
@@ -653,7 +655,7 @@ function RequirementRow({
   );
 }
 
-function BackgroundLibraryPanel({
+export function BackgroundLibraryPanel({
   product,
   selectedShot,
   library,
@@ -684,7 +686,7 @@ function BackgroundLibraryPanel({
   >("all");
   const [query, setQuery] = useState("");
   const [shuffledBackgroundIds, setShuffledBackgroundIds] = useState<string[] | null>(null);
-  const [visibleBackgroundCount, setVisibleBackgroundCount] = useState(BACKGROUND_PAGE_SIZE);
+  const [requestedBackgroundPage, setRequestedBackgroundPage] = useState(0);
 
   useEffect(() => {
     setManifestDraft(library?.manifestPath ?? "");
@@ -693,8 +695,8 @@ function BackgroundLibraryPanel({
   }, [library?.labelLogoPath, library?.manifestPath]);
 
   useEffect(() => {
-    setVisibleBackgroundCount(BACKGROUND_PAGE_SIZE);
-  }, [filter, pickerOpen, query, shuffledBackgroundIds]);
+    setRequestedBackgroundPage(0);
+  }, [filter, pickerOpen, query, shuffledBackgroundIds, product?.id, selectedShot?.id]);
 
   const allBackgrounds = library?.backgrounds ?? [];
   const backgrounds = useMemo(
@@ -743,8 +745,9 @@ function BackgroundLibraryPanel({
       return matchesFilter && matchesQuery;
     });
   }, [filter, orderedBackgrounds, query]);
-  const visibleBackgrounds = filteredBackgrounds.slice(0, visibleBackgroundCount);
-  const remainingBackgroundCount = filteredBackgrounds.length - visibleBackgrounds.length;
+  const backgroundPageCount = Math.max(1, Math.ceil(filteredBackgrounds.length / BACKGROUND_PAGE_SIZE));
+  const backgroundPage = Math.min(requestedBackgroundPage, backgroundPageCount - 1);
+  const visibleBackgrounds = filteredBackgrounds.slice(backgroundPage * BACKGROUND_PAGE_SIZE, (backgroundPage + 1) * BACKGROUND_PAGE_SIZE);
   const shuffleBackgrounds = () => {
     setShuffledBackgroundIds((current) => shuffleBackgroundIds(backgrounds.map((background) => background.id), current));
     setPickerOpen(true);
@@ -894,11 +897,13 @@ function BackgroundLibraryPanel({
             <div className="modalHeader">
               <div>
                 <h2>Choose Background</h2>
-                <p>
-                  Showing {visibleBackgrounds.length} of {filteredBackgrounds.length}
+                <p role="status">
+                  {filteredBackgrounds.length ? `${backgroundPage * BACKGROUND_PAGE_SIZE + 1}–${backgroundPage * BACKGROUND_PAGE_SIZE + visibleBackgrounds.length}` : "0"} of {filteredBackgrounds.length} · Page {backgroundPage + 1} of {backgroundPageCount}
                 </p>
               </div>
               <div className="backgroundPickerHeaderActions">
+                <button className="miniButton" type="button" aria-label="Previous backgrounds" disabled={backgroundPage === 0} onClick={() => setRequestedBackgroundPage(backgroundPage - 1)}>Previous</button>
+                <button className="miniButton" type="button" aria-label="Next backgrounds" disabled={backgroundPage + 1 >= backgroundPageCount} onClick={() => setRequestedBackgroundPage(backgroundPage + 1)}>Next</button>
                 <button className="miniButton" type="button" onClick={shuffleBackgrounds}>
                   <Shuffle size={14} />
                   <span>Shuffle</span>
@@ -966,16 +971,6 @@ function BackgroundLibraryPanel({
                     ? "No Runner Foyer or Hallway backgrounds are connected."
                     : "No backgrounds match this filter."}
                 </div>
-              ) : null}
-              {remainingBackgroundCount > 0 ? (
-                <button
-                  className="controlButton backgroundLoadMore"
-                  type="button"
-                  onClick={() => setVisibleBackgroundCount((count) => count + BACKGROUND_PAGE_SIZE)}
-                >
-                  <ChevronDown size={15} />
-                  <span>Show {Math.min(BACKGROUND_PAGE_SIZE, remainingBackgroundCount)} more</span>
-                </button>
               ) : null}
             </div>
           </section>

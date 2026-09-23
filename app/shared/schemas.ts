@@ -177,6 +177,7 @@ export const MasterShotsSchema = z.object({
 });
 
 export const ProductStateSchema = z.object({
+  revision: z.number().int().nonnegative().default(0),
   version: z.literal(1),
   productId: z.string().min(1),
   createdAt: z.string().min(1),
@@ -288,7 +289,13 @@ export const AssetRecordSchema = z.object({
   }).nullable()
 });
 
+const GenerationContextSchema = z.object({
+  selectedBackgroundId: z.string().nullable(),
+  selectedConstructionId: RugConstructionIdSchema.nullable()
+}).strict();
+
 export const GenerateRequestSchema = z.object({
+  context: GenerationContextSchema.optional(),
   shotId: z.string().regex(/^[a-z0-9_]+$/),
   prompt: z.string().min(1),
   settings: z.object({
@@ -301,6 +308,7 @@ export const GenerateRequestSchema = z.object({
 });
 
 export const BulkGenerateRequestSchema = z.object({
+  context: GenerationContextSchema.optional(),
   settings: z.object({
     aspectRatio: AspectRatioSchema,
     imageSize: ImageSizeSchema

@@ -33,10 +33,34 @@ export async function loadPersistedJobs(productRoot: string): Promise<JobRecord[
     );
 }
 
-export async function savePersistedJobs(productRoot: string, jobs: JobRecord[]) {
+type Waiter = { resolve: () => void; reject: (error: unknown) => void };
+const writers = new Map<string, { latest: JobRecord[] | null; waiters: Waiter[] }>();
+export function savePersistedJobs(productRoot: string, jobs: JobRecord[]): Promise<void> {
   const filePath = jobStorePath(productRoot);
-  await ensureDir(path.dirname(filePath));
-  await atomicWriteJson(filePath, jobs.slice(0, 500));
+  let writer = writers.get(filePath);
+  const start = !writer;
+  if (!writer) { writer = { latest: null, waiters: [] }; writers.set(filePath, writer); }
+  writer.latest = structuredClone(jobs.slice(0, 500));
+  const result = new Promise<void>((resolve, reject) => writer!.waiters.push({ resolve, reject }));
+  if (start) {
+    const current = writer;
+    void (async () => {
+      // Coalesce status bursts before touching disk; later writes never overtake earlier ones.
+      await Promise.resolve();
+      while (current.latest) {
+        const snapshot = current.latest;
+        const waiters = current.waiters.splice(0);
+        current.latest = null;
+        try {
+          await ensureDir(path.dirname(filePath));
+          await atomicWriteJson(filePath, snapshot);
+          waiters.forEach(waiter => waiter.resolve());
+        } catch (error) { waiters.forEach(waiter => waiter.reject(error)); }
+      }
+      writers.delete(filePath);
+    })();
+  }
+  return result;
 }
 
 function isJobRecordLike(value: unknown): value is JobRecord {

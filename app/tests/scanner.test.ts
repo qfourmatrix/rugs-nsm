@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, unlink, symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { compareProductsByCreatedAt, ensureProductRoot, resolveProductImagePath, scanProducts } from "../server/scanner";
@@ -24,6 +24,25 @@ describe("product scanner and root bootstrap", () => {
 
   afterEach(async () => {
     await cleanupTempWorkspace(workspace);
+  });
+
+  it("scans only the requested product and observes external changes immediately", async () => {
+    await makeProduct(productRoot, "Selected", ["base.jpg"]);
+    await makeProduct(productRoot, "Unrelated", ["base.png"]);
+    expect((await scanProducts({ productRoot, productId: "Selected" })).products.map(p => p.id)).toEqual(["Selected"]);
+    await unlink(path.join(productRoot, "Selected", "base.jpg"));
+    expect((await scanProducts({ productRoot, productId: "Selected" })).products[0].status).toBe("missing_base");
+    await writeFakeImage(path.join(productRoot, "Selected", "base.png"));
+    expect((await scanProducts({ productRoot, productId: "Selected" })).products[0].baseImage).toBe("base.png");
+    expect((await scanProducts({ productRoot, productId: "Missing" })).products).toEqual([]);
+  });
+
+  it("rejects targeted traversal and excludes hidden and symlink products", async () => {
+    await makeProduct(productRoot, ".Hidden", ["base.jpg"]);
+    await symlink(path.join(productRoot, ".Hidden"), path.join(productRoot, "Linked"));
+    await expect(scanProducts({ productRoot, productId: "../outside" })).rejects.toThrow();
+    expect((await scanProducts({ productRoot, productId: ".Hidden" })).products).toEqual([]);
+    expect((await scanProducts({ productRoot, productId: "Linked" })).products).toEqual([]);
   });
 
   it("creates the configured root and never falls back to old Rugs/first_image data", async () => {

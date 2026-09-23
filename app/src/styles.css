@@ -3004,6 +3004,7 @@ body.isResizingPanels {
 
 .backgroundPickerHeaderActions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
 }
@@ -3056,14 +3057,20 @@ body.isResizingPanels {
 
 .backgroundPickerModal {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
-  width: min(1120px, calc(100vw - 48px));
+  width: min(1120px, 100%);
+  min-width: 0;
   max-height: min(780px, calc(100vh - 48px));
   padding: 12px;
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 18px 60px rgba(20, 25, 35, 0.2);
+}
+
+.backgroundPickerModal > .modalHeader {
+  flex-wrap: wrap;
 }
 
 .backgroundFilters {
@@ -3239,7 +3246,7 @@ body.isResizingPanels {
 
 @media (max-width: 960px) {
   .backgroundPickerModal {
-    width: min(840px, calc(100vw - 32px));
+    width: min(840px, 100%);
   }
 
   .backgroundGrid {

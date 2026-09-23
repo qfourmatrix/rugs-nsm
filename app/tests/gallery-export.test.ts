@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildGalleryExport, listGalleryExportReceipts, preflightGalleryExport } from "../server/gallery-export";
+import { buildGalleryExport, galleryConversionMetrics, GalleryExportRegistry, listGalleryExportReceipts, preflightGalleryExport } from "../server/gallery-export";
 import { saveGallerySelection } from "../server/gallery-store";
 import { sha256File } from "../server/fsUtils";
 import type { AssetRecord } from "../shared/types";
@@ -28,6 +28,115 @@ describe("curated Shopify gallery exports", () => {
   });
 
   afterEach(async () => cleanupTempWorkspace(workspace));
+
+  it("encodes once across preflight and build and detects corrupted cached output", async () => {
+    await makeSquareProduct("reuse-rug", 256);
+    const before = galleryConversionMetrics();
+    const preflight = await preflightGalleryExport({ productRoot, productIds: ["reuse-rug"] });
+    const fingerprint = preflight.shapes[0].contentFingerprint;
+    if (!fingerprint) throw new Error("Expected a valid preflight fingerprint");
+    await buildGalleryExport({ productRoot, productIds: ["reuse-rug"], expectedFingerprints: { "reuse-rug": fingerprint }, exportId: "export_reused" });
+    expect(galleryConversionMetrics().encodes - before.encodes).toBe(1);
+    expect(galleryConversionMetrics().hits - before.hits).toBe(2);
+    const jobsDir = path.join(productRoot, ".product-shot-queue", "export-jobs");
+    const cacheDir = (await fs.readdir(jobsDir)).find(name => name.startsWith("export_cache_"))!;
+    const cacheFile = (await fs.readdir(path.join(jobsDir, cacheDir))).find(name => name.endsWith(".webp"))!;
+    await fs.writeFile(path.join(jobsDir, cacheDir, cacheFile), "corrupted cache");
+    const checked = await preflightGalleryExport({ productRoot, productIds: ["reuse-rug"] });
+    expect(checked.readyCount).toBe(1);
+    expect(galleryConversionMetrics().encodes - before.encodes).toBe(2);
+  });
+
+  it("queues exports with finite admission and freezes the selection at submission", async () => {
+    await makeSquareProduct("queued-rug", 64);
+    const registry = new GalleryExportRegistry(productRoot);
+    const selected = ["queued-rug"];
+    const queued = Array.from({ length: 4 }, () => registry.start(selected));
+    selected[0] = "changed-after-submit";
+    expect(() => registry.start(["queued-rug"])).toThrow("Three exports");
+    expect(registry.get(queued[3].exportId).status).toBe("queued");
+    const deadline = Date.now() + 10000;
+    while (queued.some(job => ["queued", "building"].includes(registry.get(job.exportId).status))) {
+      if (Date.now() > deadline) throw new Error("Export queue did not drain");
+      expect(queued.filter(job => registry.get(job.exportId).status === "building").length).toBeLessThanOrEqual(1);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(queued.map(job => registry.get(job.exportId).status)).toEqual(["ready", "ready", "ready", "ready"]);
+    for (const job of queued) await registry.markDownloaded(job.exportId);
+  });
+
+  it("cancels queued and active exports without changing source files", async () => {
+    const { productDir } = await makeSquareProduct("cancel-rug", 256);
+    const originalHash = await sha256File(path.join(productDir, "base.png"));
+    const registry = new GalleryExportRegistry(productRoot);
+    const first = registry.start(["cancel-rug"]);
+    const second = registry.start(["cancel-rug"]);
+    registry.cancel(second.exportId);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    registry.cancel(first.exportId);
+    const deadline = Date.now() + 5000;
+    while ([first, second].some(job => ["queued", "building"].includes(registry.get(job.exportId).status))) {
+      if (Date.now() > deadline) throw new Error("Cancellation never completed");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(registry.get(second.exportId).status).toBe("cancelled");
+    expect(registry.get(first.exportId).status).toBe("cancelled");
+    expect(await sha256File(path.join(productDir, "base.png"))).toBe(originalHash);
+    expect(await listGalleryExportReceipts(productRoot)).toEqual([]);
+    for (const job of [first, second]) await expect(fs.access(path.join(productRoot, ".product-shot-queue", "export-jobs", job.exportId))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("bounds undownloaded archives and frees capacity only after download", async () => {
+    await makeSquareProduct("retained-rug", 64);
+    const registry = new GalleryExportRegistry(productRoot, 2);
+    expect(registry.retentionStats()).toMatchObject({ jobs: 0, readyArchives: 0, receiptImages: 0, receiptShapes: 0 });
+    const first = registry.start(["retained-rug"]);
+    const second = registry.start(["retained-rug"]);
+    expect(() => registry.start(["retained-rug"])).toThrow("awaiting download");
+    const deadline = Date.now() + 10000;
+    while ([first, second].some(job => ["queued", "building"].includes(registry.get(job.exportId).status))) {
+      if (Date.now() > deadline) throw Error("Export did not finish");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const preserved = registry.download(second.exportId).archivePath;
+    expect(registry.retentionStats()).toMatchObject({ jobs: 2, readyArchives: 2, receiptImages: 2, receiptShapes: 2 });
+    expect(registry.availableDownloads().map(item => item.exportId)).toEqual([first.exportId, second.exportId]);
+    const checksum = await sha256File(preserved);
+    expect(() => registry.start(["retained-rug"])).toThrow("awaiting download");
+    await registry.markDownloaded(first.exportId);
+    expect(registry.retentionStats()).toMatchObject({ jobs: 2, readyArchives: 1, receiptImages: 1 });
+    expect(registry.get(first.exportId).receipt).toBeNull();
+    const savedReceipt = (await listGalleryExportReceipts(productRoot)).find(receipt => receipt.exportId === first.exportId);
+    expect(savedReceipt?.downloadedAt).toBeTruthy();
+    expect(savedReceipt?.shapes[0].images).toHaveLength(1);
+    expect(registry.availableDownloads().map(item => item.exportId)).toEqual([second.exportId]);
+    const replacement = registry.start(["retained-rug"]);
+    registry.cancel(replacement.exportId);
+    while (["queued", "building"].includes(registry.get(replacement.exportId).status)) {
+      if (Date.now() > deadline) throw Error("Cancellation did not finish");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(await sha256File(preserved)).toBe(checksum);
+    await registry.markDownloaded(second.exportId);
+  });
+
+  it("preserves an oversized ready archive and stops the next queued build", async () => {
+    await makeSquareProduct("budget-rug", 64);
+    const registry = new GalleryExportRegistry(productRoot, 8, 1);
+    const first = registry.start(["budget-rug"]);
+    const second = registry.start(["budget-rug"]);
+    const deadline = Date.now() + 10000;
+    while ([first, second].some(job => ["queued", "building"].includes(registry.get(job.exportId).status))) {
+      if (Date.now() > deadline) throw Error("Export did not finish");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(registry.get(first.exportId).status).toBe("ready");
+    expect(registry.get(second.exportId).status).toBe("failed");
+    expect(registry.get(second.exportId).error).toContain("storage threshold");
+    expect(() => registry.start(["budget-rug"])).toThrow("storage threshold");
+    await fs.access(registry.download(first.exportId).archivePath);
+    await registry.markDownloaded(first.exportId);
+  });
 
   async function makeSquareProduct(productId: string, size = 1200) {
     const productDir = await makeProduct(productRoot, productId, []);

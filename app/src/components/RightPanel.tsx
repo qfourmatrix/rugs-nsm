@@ -28,6 +28,8 @@ interface RightPanelProps {
   onLoadShot: (shot: Shot) => void;
   savingState: boolean;
   busyAction: string | null;
+  busyActions: ReadonlySet<string>;
+  galleryBusy: boolean;
   runningShotIds: Set<string>;
   onPromptChange: (value: string) => void;
   onSettingsChange: (settings: Partial<ProductState["settings"]>) => void;
@@ -64,6 +66,8 @@ export function RightPanel({
   onLoadShot,
   savingState,
   busyAction,
+  busyActions,
+  galleryBusy,
   runningShotIds,
   onPromptChange,
   onSettingsChange,
@@ -103,17 +107,17 @@ export function RightPanel({
           Compare
         </button>
       </div>
-      <div className="exportReadinessControl" role="group" aria-label={`${product?.shape ?? "Shape"} export readiness`} aria-busy={busyAction === "export-readiness"}>
+      <div className="exportReadinessControl" role="group" aria-label={`${product?.shape ?? "Shape"} export readiness`} aria-busy={busyActions.has("export-readiness")}>
         <span className="exportReadinessLabel">Export</span>
         <div className="exportReadinessSegments">
         <button type="button" className={!product?.exportReady ? "isActive" : ""} aria-pressed={!product?.exportReady}
-          disabled={!product || Boolean(busyAction) || Boolean(product.readinessError)} onClick={() => onExportReadyChange(false)}>Not ready</button>
+          disabled={!product || Boolean(busyAction) || galleryBusy || Boolean(product.readinessError)} onClick={() => onExportReadyChange(false)}>Not ready</button>
         <button type="button" className={product?.exportReady ? "isActive" : ""} aria-pressed={Boolean(product?.exportReady)}
-          disabled={!product || product.status !== "ready" || !product.baseImage || Boolean(busyAction) || Boolean(product.readinessError)}
+          disabled={!product || product.status !== "ready" || !product.baseImage || Boolean(busyAction) || galleryBusy || Boolean(product.readinessError)}
           title={product?.status !== "ready" ? "A valid main image is needed before marking this shape ready" : "Mark this shape ready for export"}
           onClick={() => onExportReadyChange(true)}>Ready</button>
         </div>
-        {busyAction === "export-readiness" ? <span role="status">Saving…</span> : null}
+        {busyActions.has("export-readiness") ? <span role="status">Saving…</span> : null}
         {product?.readinessError ? <span role="alert">Readiness unavailable</span> : null}
       </div>
       </div>
@@ -128,6 +132,7 @@ export function RightPanel({
           jobs={jobs}
           savingState={savingState}
           busyAction={busyAction}
+          busyActions={busyActions}
           runningShotIds={runningShotIds}
           onLoadShot={onLoadShot}
           onPromptChange={onPromptChange}
@@ -149,7 +154,7 @@ export function RightPanel({
           product={product}
           selectedAsset={selectedAsset}
           assets={compareAssets}
-          actionDisabled={Boolean(busyAction)}
+          actionDisabled={Boolean(busyAction) || galleryBusy}
           retryDisabled={selectedAsset ? runningShotIds.has(selectedAsset.shotId) : false}
           onBackToGenerate={() => onModeChange("generate")}
           onPrevious={onPreviousAsset}

@@ -32,7 +32,7 @@ function preflight(): GalleryPreflight { return { version: 1, checkedAt: "2026-0
 async function render() { await act(async () => root.render(createElement(GalleryExportWorkspace, { products, currentProduct: products[0], masterShots: null, onClose: vi.fn() }))); }
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.getGalleryExportReceipts).mockResolvedValue([]);
+  vi.mocked(api.getGalleryExportReceipts).mockResolvedValue({ receipts: [], nextCursor: null });
   vi.mocked(api.getGallerySelection).mockImplementation(async (id) => gallery(id));
   vi.mocked(api.getGenerated).mockResolvedValue({ active: [], trash: [], aggregates: {} });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);

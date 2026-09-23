@@ -1,5 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { WeightedLru } from "../shared/weighted-lru";
 import type { AssetRecord, ShotAggregateState } from "../shared/types";
 import { AssetRecordSchema } from "./schemas";
 import { buildAssetId } from "./assetNaming";
@@ -39,10 +41,48 @@ export function trashDir(productRoot: string, productId: string) {
   return path.join(productDir(productRoot, productId), "trash");
 }
 
-async function readAssetAt(metadataPath: string): Promise<AssetRecord> {
+const METADATA_CACHE_WEIGHT_LIMIT = 32 * 1024 * 1024;
+const metadataCache = new WeightedLru<string, { signature: string; asset: AssetRecord }>(4096, METADATA_CACHE_WEIGHT_LIMIT);
+const compactMetadataCache = new WeightedLru<string, { signature: string; asset: AssetRecord }>(8192, 16 * 1024 * 1024);
+/** Aggregate-only diagnostics; weights are estimates, never a measured JS heap size. */
+export function assetMetadataCacheStats() {
+  return {
+    full: { entries: metadataCache.size, estimatedBytes: metadataCache.weight, maxEstimatedBytes: METADATA_CACHE_WEIGHT_LIMIT },
+    compact: { entries: compactMetadataCache.size, estimatedBytes: compactMetadataCache.weight, maxEstimatedBytes: 16 * 1024 * 1024 }
+  };
+}
+async function readCompactAssetAt(metadataPath: string): Promise<AssetRecord> {
+  const info = await fs.stat(metadataPath, { bigint: true });
+  const signature = `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  const cached = compactMetadataCache.get(metadataPath);
+  if (cached?.signature === signature) return structuredClone(cached.asset);
+  // Card browsing must not retain a second copy containing full prompt/provider
+  // details. Explicit detail/generation reads still use the full-record cache.
+  const asset = compactAssetRecord(await readAssetAt(metadataPath, false));
+  asset.detailsRevision = createHash("sha256").update(signature).digest("hex");
+  const after = await fs.stat(metadataPath, { bigint: true });
+  if (`${after.ino}:${after.size}:${after.mtimeNs}:${after.ctimeNs}` === signature) {
+    compactMetadataCache.set(metadataPath, { signature, asset }, JSON.stringify(asset).length * 2 + 1024);
+  }
+  // Never expose the cached object to callers that may review/mutate returned records.
+  return structuredClone(asset);
+}
+async function readAssetAt(metadataPath: string, retainFullRecord = true): Promise<AssetRecord> {
+  const info = await fs.stat(metadataPath, { bigint: true });
+  const signature = `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  const cached = metadataCache.get(metadataPath);
+  if (cached?.signature === signature) return structuredClone(cached.asset);
   const parsed = AssetRecordSchema.safeParse(JSON.parse(await fs.readFile(metadataPath, "utf8")));
   if (!parsed.success) {
     throw validationError("INVALID_ASSET_METADATA", "Generated asset metadata is invalid.", parsed.error.issues);
+  }
+  if (retainFullRecord) {
+    const after = await fs.stat(metadataPath, { bigint: true });
+    if (`${after.ino}:${after.size}:${after.mtimeNs}:${after.ctimeNs}` === signature) {
+      const weight = Number(info.size) * 2 + 1024;
+      if (weight <= METADATA_CACHE_WEIGHT_LIMIT) metadataCache.set(metadataPath, { signature, asset: structuredClone(parsed.data) }, weight);
+      else metadataCache.delete(metadataPath);
+    }
   }
   return parsed.data;
 }
@@ -80,24 +120,45 @@ async function listMetadataFiles(dir: string) {
     .map((entry) => path.join(dir, entry.name));
 }
 
+/** Validate every metadata identity without loading prompt/provider payloads. */
+export async function generatedMetadataRevision(productRoot: string, productId: string, context: string) {
+  const hash = createHash("sha256").update(context);
+  for (const directory of [generatedDir(productRoot, productId), trashDir(productRoot, productId)]) {
+    const files = (await listMetadataFiles(directory)).sort();
+    for (let offset = 0; offset < files.length; offset += 16) {
+      const signatures = await Promise.all(files.slice(offset, offset + 16).map(async file => {
+        const info = await fs.stat(file, { bigint: true });
+        return `${file}\0${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}\0`;
+      }));
+      for (const signature of signatures) hash.update(signature);
+    }
+  }
+  return `W/"generated-${hash.digest("hex")}"`;
+}
+
 export async function listGeneratedAssets({
   productRoot,
   productId,
-  runtimeAggregates = {}
+  runtimeAggregates = {},
+  compact = false
 }: {
   productRoot: string;
   productId: string;
   runtimeAggregates?: Record<string, ShotAggregateState>;
+  compact?: boolean;
 }) {
   const active: AssetRecord[] = [];
   const trash: AssetRecord[] = [];
 
+  // Enumeration must not promote an entire history into the full-prompt cache.
+  // Reuse already-cached details, but reserve new full-record admission for
+  // individual record operations. Compact browsing has its own bounded cache.
   for (const file of await listMetadataFiles(generatedDir(productRoot, productId))) {
-    active.push(await readAssetAt(file));
+    active.push(await (compact ? readCompactAssetAt(file) : readAssetAt(file, false)));
   }
 
   for (const file of await listMetadataFiles(trashDir(productRoot, productId))) {
-    trash.push(await readAssetAt(file));
+    trash.push(await (compact ? readCompactAssetAt(file) : readAssetAt(file, false)));
   }
 
   active.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
@@ -107,6 +168,14 @@ export async function listGeneratedAssets({
     active,
     trash,
     aggregates: aggregateShots(active, trash, runtimeAggregates)
+  };
+}
+
+/** Preserve card/review/action identities; full immutable source metadata is fetched on inspection. */
+export function compactAssetRecord(asset: AssetRecord): AssetRecord {
+  return { ...asset, detailsOmitted: true, prompt: "",
+    inputs: { ...asset.inputs, background: asset.inputs.background ? { ...asset.inputs.background, prompt: "" } : asset.inputs.background },
+    error: asset.error ? { ...asset.error, raw: null } : null
   };
 }
 

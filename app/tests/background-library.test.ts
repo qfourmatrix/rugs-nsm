@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   getBackgroundSnapshot,
+  getCachedBackgroundLibrary,
   getLabelLogoSnapshot,
   markBackgroundUsed,
   scanBackgroundLibrary,
@@ -29,6 +30,44 @@ describe("background library", () => {
 
   afterEach(async () => {
     await cleanupTempWorkspace(workspace);
+  });
+
+  it("reuses library reads without rewriting state and serializes usage updates", async () => {
+    await writeFile(manifestPath, JSON.stringify({ id: "one", type: "living", title: "One", prompt: "room" }));
+    const first = await setBackgroundManifestPath({ productRoot, manifestPath });
+    const persistedPath = path.join(productRoot, ".product-shot-queue/background-library.json");
+    const before = await stat(persistedPath);
+    const reads = await Promise.all(Array.from({ length: 10 }, () => getCachedBackgroundLibrary({ productRoot })));
+    expect(reads.every(result => result.scannedAt === first.scannedAt)).toBe(true);
+    expect((await stat(persistedPath)).mtimeMs).toBe(before.mtimeMs);
+    reads[0].backgrounds[0].title = "caller mutation";
+    expect((await getCachedBackgroundLibrary({ productRoot })).backgrounds[0].title).toBe("One");
+    await Promise.all(Array.from({ length: 10 }, () => markBackgroundUsed({ productRoot, backgroundId: "one" })));
+    expect((await getCachedBackgroundLibrary({ productRoot })).backgrounds[0].useCount).toBe(10);
+    await scanBackgroundLibrary({ productRoot });
+    expect((await getCachedBackgroundLibrary({ productRoot })).backgrounds[0].useCount).toBe(10);
+  });
+
+  it("reads the selected prompt fresh and explicit rescan refreshes the cached prompt", async () => {
+    const prompt = path.join(libraryDir, "one.txt");
+    await writeFile(prompt, "original room");
+    await writeFile(manifestPath, JSON.stringify({ id: "one", type: "living", title: "One", promptPath: "one.txt" }));
+    await setBackgroundManifestPath({ productRoot, manifestPath });
+    await writeFile(prompt, "updated room");
+    expect((await getBackgroundSnapshot({ productRoot, backgroundId: "one" }))?.prompt).toBe("updated room");
+    expect((await scanBackgroundLibrary({ productRoot })).backgrounds[0].prompt).toBe("updated room");
+    await unlink(prompt);
+    await expect(getBackgroundSnapshot({ productRoot, backgroundId: "one" })).rejects.toThrow();
+  });
+
+  it("invalidates removed backgrounds immediately when the manifest changes", async () => {
+    await writeFile(manifestPath, JSON.stringify({ id: "one", type: "living", title: "One", prompt: "room" }));
+    await setBackgroundManifestPath({ productRoot, manifestPath });
+    await writeFile(manifestPath, JSON.stringify({ id: "two", type: "living", title: "Two", prompt: "new room" }));
+    await expect(getBackgroundSnapshot({ productRoot, backgroundId: "one" })).rejects.toThrow("Unknown background");
+    expect((await getCachedBackgroundLibrary({ productRoot })).backgrounds.map(b => b.id)).toEqual(["two"]);
+    await writeFile(manifestPath, "invalid JSON");
+    await expect(getBackgroundSnapshot({ productRoot, backgroundId: "two" })).rejects.toThrow();
   });
 
   it("imports JSONL backgrounds and resolves prompt and preview paths", async () => {

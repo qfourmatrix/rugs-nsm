@@ -86,7 +86,7 @@ describe("studio gallery review", () => {
   });
   it("readiness controls mark a base-only shape and show the next shape independently", async () => {
     const onExportReadyChange = vi.fn();
-    const props = { mode: "generate", product: product(), generated: { active: [], trash: [], aggregates: {} }, onExportReadyChange, onModeChange: vi.fn() } as unknown as Parameters<typeof RightPanel>[0];
+    const props = { mode: "generate", product: product(), generated: { active: [], trash: [], aggregates: {} }, busyActions: new Set<string>(), galleryBusy: false, onExportReadyChange, onModeChange: vi.fn() } as unknown as Parameters<typeof RightPanel>[0];
     const dom = await render(createElement(RightPanel, props));
     expect(dom.querySelectorAll(".exportReadinessSegments > button")).toHaveLength(2);
     const ready = () => [...dom.querySelectorAll<HTMLButtonElement>(".exportReadinessControl button")].find((button) => button.textContent === "Ready")!;
@@ -98,8 +98,28 @@ describe("studio gallery review", () => {
     expect(ready().getAttribute("aria-pressed")).toBe("false");
     await act(async () => root?.render(createElement(RightPanel, { ...props, product: product({ status: "missing_base", baseImage: null }) })));
     expect(ready().disabled).toBe(true);
-    await act(async () => root?.render(createElement(RightPanel, { ...props, busyAction: "export-readiness" })));
+    await act(async () => root?.render(createElement(RightPanel, { ...props, busyActions: new Set(["export-readiness"]), galleryBusy: true })));
     expect(dom.querySelector(".exportReadinessControl")?.getAttribute("aria-busy")).toBe("true");
     expect([...dom.querySelectorAll<HTMLButtonElement>(".exportReadinessSegments button")].every((button) => button.disabled)).toBe(true);
+  });
+
+  it("keeps attempt cards bounded while browsing all older pages and bulk accepting", async () => {
+    const entries = Array.from({ length: 241 }, (_, index) => asset({ assetId: `page-${index}` }));
+    const onAcceptAllDone = vi.fn();
+    const dom = await render(createElement(LeftPanel, { product: product(), generated: { active: entries, trash: [], aggregates: {} },
+      jobs: [], assets: entries, selectedAssetId: null, showTrash: false, actionDisabled: false, runningShotIds: new Set<string>(),
+      onAcceptAllDone, onShowTrashChange: vi.fn(), onSelectAsset: vi.fn(), onAccept: vi.fn(), onReject: vi.fn(), onRetry: vi.fn(), onCancelJob: vi.fn() }));
+    const older = () => [...dom.querySelectorAll<HTMLButtonElement>('[aria-label="Attempt pages"] button')].find(button => button.textContent === "Older attempts")!;
+    expect(dom.querySelectorAll(".attemptGrid .attemptCard")).toHaveLength(80);
+    for (let page = 1; page <= 3; page++) {
+      await act(async () => older().click());
+      expect(dom.querySelectorAll(".attemptGrid .attemptCard").length).toBe(page === 3 ? 1 : 80);
+    }
+    expect(older().disabled).toBe(true);
+    await act(async () => dom.querySelector<HTMLButtonElement>(".acceptAllDone")!.click());
+    expect(onAcceptAllDone).toHaveBeenCalledWith(entries.map(entry => entry.assetId));
+    const newer = [...dom.querySelectorAll<HTMLButtonElement>('[aria-label="Attempt pages"] button')].find(button => button.textContent === "Newer attempts")!;
+    await act(async () => newer.click());
+    expect(dom.querySelectorAll(".attemptGrid .attemptCard")).toHaveLength(80);
   });
 });

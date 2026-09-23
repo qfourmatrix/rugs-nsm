@@ -4,7 +4,7 @@ import { composeGenerationPrompt } from "../server/prompt-compose";
 import { makeShot } from "./test-utils";
 
 describe("approved natural Runner room cameras", () => {
-  it("uses an offset three-quarter hero and a distinct cropped elevated detail", () => {
+  it("uses a straight-on wide view and a distinct closer elevated view", () => {
     const wide = resolveShapeShotProfile("runner", makeShot({ id: "wide_room_hero" }));
     const close = resolveShapeShotProfile("runner", makeShot({ id: "high_angle_lifestyle" }));
     expect(wide.override.camera).toContain("Offset three-quarter");

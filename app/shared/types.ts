@@ -148,6 +148,7 @@ export interface ShapeVariantSummary {
 }
 
 export interface ProductState {
+  revision?: number;
   version: 1;
   productId: string;
   createdAt: string;
@@ -233,6 +234,9 @@ export interface GenerationConstructionSnapshot {
 }
 
 export interface AssetRecord {
+  /** Read-only list projection. Prompt/background prompt/raw error are unloaded, not empty source values. */
+  detailsOmitted?: true;
+  detailsRevision?: string;
   version: 1;
   assetId: string;
   productId: string;
@@ -409,7 +413,7 @@ export interface GalleryExportReceipt {
   archiveSha256: string;
 }
 
-export type GalleryExportJobStatus = "queued" | "building" | "ready" | "failed" | "downloaded";
+export type GalleryExportJobStatus = "queued" | "building" | "ready" | "failed" | "downloaded" | "cancelled";
 
 export interface GalleryExportJob {
   exportId: string;

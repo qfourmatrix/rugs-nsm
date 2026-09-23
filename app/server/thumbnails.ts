@@ -7,6 +7,8 @@ import { ensureDir, pathExists } from "./fsUtils";
 const THUMBNAIL_WIDTH = 360;
 const THUMBNAIL_QUALITY = 68;
 const inFlightThumbnails = new Map<string, Promise<string | null>>();
+let activeConversions = 0;
+const conversionWaiters: Array<() => void> = [];
 
 export type ThumbnailKind = "base" | "reference" | "generated" | "trash";
 
@@ -95,6 +97,9 @@ async function thumbnailPath({
 }
 
 async function createThumbnail(sourcePath: string, targetPath: string) {
+  // Bound sharp decodes across all products and background previews.
+  if (activeConversions >= 2) await new Promise<void>(resolve => conversionWaiters.push(resolve));
+  else activeConversions += 1;
   try {
     await ensureDir(path.dirname(targetPath));
     const tempPath = path.join(
@@ -125,5 +130,9 @@ async function createThumbnail(sourcePath: string, targetPath: string) {
   } catch (error) {
     console.warn("Thumbnail generation failed; falling back to original image.", error);
     return null;
+  } finally {
+    const next = conversionWaiters.shift();
+    if (next) next();
+    else activeConversions -= 1;
   }
 }

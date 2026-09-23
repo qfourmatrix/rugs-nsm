@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
+import { promises as fs } from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyShotToProductState, loadProductState, saveProductState } from "../server/product-state";
 import type { ProductState } from "../shared/types";
 import {
@@ -24,7 +25,36 @@ describe("product prompt state", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await cleanupTempWorkspace(workspace);
+  });
+
+  it("rejects a concurrent stale tab without overwriting the winning save", async () => {
+    const initial = await loadProductState({ productRoot, productId: "SKU-A" });
+    const save = (value: string) => saveProductState({ productRoot, productId: "SKU-A", state: { ...initial, promptBox: { ...initial.promptBox, value } } });
+    const results = await Promise.allSettled([save("first tab"), save("second tab")]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find(result => result.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason.code).toBe("PRODUCT_STATE_CONFLICT");
+    const current = await loadProductState({ productRoot, productId: "SKU-A" });
+    expect(current.revision).toBe(1);
+    expect(current.promptBox.value).toBe("first tab");
+    const saved = await saveProductState({ productRoot, productId: "SKU-A", state: current });
+    expect(saved.revision).toBe(2);
+  });
+
+  it("preserves the saved revision after a disk-full write failure and releases the product lock", async () => {
+    const initial = await loadProductState({ productRoot, productId: "SKU-A" });
+    const other = await loadProductState({ productRoot, productId: "SKU-B" });
+    const draft = { ...initial, promptBox: { ...initial.promptBox, value: "retry this draft" } };
+    const failure = Object.assign(new Error("Injected disk full"), { code: "ENOSPC" });
+    vi.spyOn(fs, "open").mockRejectedValueOnce(failure);
+    await expect(saveProductState({ productRoot, productId: "SKU-A", state: draft })).rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await loadProductState({ productRoot, productId: "SKU-A" })).toEqual(initial);
+    expect((await saveProductState({ productRoot, productId: "SKU-B", state: other })).revision).toBe((other.revision ?? 0) + 1);
+    const recovered = await saveProductState({ productRoot, productId: "SKU-A", state: draft });
+    expect(recovered.revision).toBe((initial.revision ?? 0) + 1);
+    expect(recovered.promptBox.value).toBe("retry this draft");
   });
 
   it("saves and reloads prompt box drafts per product without leaking across products", async () => {
