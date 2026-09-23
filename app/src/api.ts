@@ -23,6 +23,8 @@ import type {
   GalleryExportJob,
   GalleryExportReceipt
 } from "../shared/types";
+import { isGenerationRoute } from "../shared/generation-routes";
+import { prepareGenerationIntent } from "./generation-intent";
 
 export interface ShapeVariantsOverview {
   records: ShapeVariantRecord[];
@@ -66,22 +68,39 @@ const jsonHeaders = {
 };
 
 const thumbnailCacheVersion = "jpg-v1";
+const responseWeights = new WeakMap<object, number>();
+const responseTags = new WeakMap<object, string>();
+const generatedTags = new WeakMap<GeneratedResponse, { productId: string; tag: string }>();
+export function responseCacheWeight(value: object) { return responseWeights.get(value) ?? Infinity; }
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, unchanged?: T): Promise<T> {
+  const intent = init.method === "POST" && isGenerationRoute(path)
+    ? prepareGenerationIntent(window.localStorage, path, typeof init.body === "string" ? init.body : "null") : null;
+  const timeout = new AbortController();
+  const timer = window.setTimeout(() => timeout.abort(), 120000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
+  try {
   const response = await fetch(path, {
     ...init,
+    signal,
     headers: {
       ...(init.body ? jsonHeaders : undefined),
-      ...init.headers
+      ...init.headers,
+      ...(intent ? { "Idempotency-Key": intent.key } : {})
     }
   });
 
+  if (response.status === 304 && unchanged !== undefined) return unchanged;
   const text = await response.text();
   const data = text ? safeJsonParse(text) : null;
+  if (isObject(data)) responseWeights.set(data, text.length * 2);
+  const tag = response.headers.get("ETag");
+  if (isObject(data) && tag) responseTags.set(data, tag);
+  if (response.headers.get("Idempotency-Status") === "complete") intent?.confirmed();
 
   if (!response.ok) {
     const errorPayload = isObject(data) && isObject(data.error) ? data.error : null;
@@ -98,6 +117,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   return data as T;
+  } catch (error) {
+    if (timeout.signal.aborted && !init.signal?.aborted) {
+      const mutation = init.method && init.method !== "GET";
+      throw new ApiError(mutation
+        ? "The server did not confirm this action. It may still have completed. Check job history or reload before trying again; generation was not automatically retried."
+        : "The server took too long to respond. Check that the studio is running, then refresh.", 408, "REQUEST_TIMEOUT");
+    }
+    throw error;
+  } finally { window.clearTimeout(timer); }
 }
 
 function safeJsonParse(text: string): unknown {
@@ -224,8 +252,8 @@ export async function updateLabelLogoPath(labelLogoPath: string): Promise<Backgr
   return unwrap<BackgroundLibraryState>(data, ["library"]);
 }
 
-export async function getProductState(productId: string): Promise<ProductState> {
-  const data = await request<unknown>(productPath(productId, "/state"));
+export async function getProductState(productId: string, signal?: AbortSignal): Promise<ProductState> {
+  const data = await request<unknown>(productPath(productId, "/state"), { signal });
   return unwrap<ProductState>(data, ["state", "productState"]);
 }
 
@@ -251,15 +279,32 @@ export async function updateProductBackground(
   return unwrap<ProductState>(data, ["state", "productState"]);
 }
 
-export async function getGenerated(productId: string): Promise<GeneratedResponse> {
-  const data = await request<unknown>(productPath(productId, "/generated"));
+export async function getGenerated(productId: string, signal?: AbortSignal, previous?: GeneratedResponse): Promise<GeneratedResponse> {
+  const saved = previous ? generatedTags.get(previous) : undefined;
+  const reusable = saved?.productId === productId ? previous : undefined;
+  const data = await request<unknown>(productPath(productId, "/generated?compact=1"), { signal,
+    ...(reusable ? { headers: { "If-None-Match": saved!.tag }, cache: "no-store" as const } : {})
+  }, reusable ? { generated: reusable } : undefined);
   const generated = unwrap<GeneratedResponse>(data, ["generated"]);
+  if (reusable && generated === reusable) return reusable;
 
-  return {
+  const result = {
     active: generated?.active ?? [],
     trash: generated?.trash ?? [],
     aggregates: generated?.aggregates ?? {}
   };
+  responseWeights.set(result, isObject(data) ? responseCacheWeight(data) : Infinity);
+  const tag = isObject(data) ? responseTags.get(data) : undefined;
+  if (tag?.startsWith('W/"generated-')) generatedTags.set(result, { productId, tag });
+  return result;
+}
+
+export async function getGeneratedAsset(productId: string, assetId: string, signal?: AbortSignal): Promise<{ asset: AssetRecord; location: "generated" | "trash" }> {
+  return request(productPath(productId, `/generated/${encodeURIComponent(assetId)}`), { signal });
+}
+
+export async function getCompletionPreview(productId: string, assetId: string, signal: AbortSignal): Promise<{ file: string | null }> {
+  return request(productPath(productId, `/generated/${encodeURIComponent(assetId)}?preview=1`), { signal });
 }
 
 export async function getGallerySelection(productId: string): Promise<GallerySelection> {
@@ -306,14 +351,21 @@ export async function startGalleryExport(productIds: string[], expectedFingerpri
   return unwrap<GalleryExportJob>(data, ["exportJob"]);
 }
 
-export async function getGalleryExportJob(exportId: string): Promise<GalleryExportJob> {
-  const data = await request<unknown>(`/api/gallery-exports/${encodeURIComponent(exportId)}`);
+export async function getGalleryExportJob(exportId: string, signal?: AbortSignal): Promise<GalleryExportJob> {
+  const data = await request<unknown>(`/api/gallery-exports/${encodeURIComponent(exportId)}`, { signal });
   return unwrap<GalleryExportJob>(data, ["exportJob"]);
 }
 
-export async function getGalleryExportReceipts(): Promise<GalleryExportReceipt[]> {
-  const data = await request<unknown>("/api/gallery-export-receipts");
-  return unwrap<GalleryExportReceipt[]>(data, ["receipts"]);
+export type AvailableGalleryDownload = Pick<GalleryExportReceipt, "exportId" | "archiveFilename" | "archiveBytes" | "completedAt" | "includedShapes" | "skippedShapes">;
+
+export async function getAvailableGalleryDownloads(signal?: AbortSignal): Promise<AvailableGalleryDownload[]> {
+  const result = await request<{ downloads: AvailableGalleryDownload[] }>("/api/gallery-exports", { signal });
+  return result.downloads;
+}
+
+export type GalleryReceiptSummary = Pick<GalleryExportReceipt, "exportId" | "completedAt" | "downloadedAt" | "archiveFilename" | "archiveBytes" | "includedShapes" | "skippedShapes">;
+export async function getGalleryExportReceipts(signal?: AbortSignal, cursor?: string): Promise<{ receipts: GalleryReceiptSummary[]; nextCursor: string | null }> {
+  return request(`/api/gallery-export-receipts/page?limit=8${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { signal });
 }
 
 export function galleryExportDownloadUrl(exportId: string) {
@@ -357,14 +409,34 @@ export async function validateRefineVariation(productId: string, assetId: string
   return unwrap<ProductSummary>(data, ["product"]);
 }
 
-export async function getJobs(): Promise<JobRecord[]> {
-  const data = await request<unknown>("/api/jobs");
+export async function getJobs(signal?: AbortSignal, productId?: string): Promise<JobRecord[]> {
+  const data = await request<unknown>(`/api/jobs${productId ? `?productId=${encodeURIComponent(productId)}` : ""}`, { signal });
   return unwrap<JobRecord[]>(data, ["jobs", "items"]);
+}
+
+export async function getJobRevision(): Promise<string> {
+  return (await request<{ revision: string }>("/api/jobs/revision")).revision;
+}
+
+export async function cancelGalleryExport(exportId: string): Promise<GalleryExportJob> {
+  const data = await request<unknown>(`/api/gallery-exports/${encodeURIComponent(exportId)}/cancel`, { method: "POST" });
+  return unwrap<GalleryExportJob>(data, ["exportJob"]);
+}
+
+export async function checkGenerationRequest(scope: string, key: string): Promise<{ state: string; responseStatus: number | null; response: unknown }> {
+  return request(`/api/generation-requests/status?${new URLSearchParams({ scope, key })}`);
+}
+
+export async function getJobHistory(productId: string, before?: number, signal?: AbortSignal): Promise<{ jobs: JobRecord[]; nextCursor: number | null }> {
+  const query = new URLSearchParams({ productId, limit: "25" });
+  if (before !== undefined) query.set("before", String(before));
+  return request(`/api/jobs/history?${query}`, { signal });
 }
 
 export async function generateFromPromptBox(
   productId: string,
   payload: {
+    context?: Pick<ProductState, "selectedBackgroundId" | "selectedConstructionId">;
     shotId: string;
     prompt: string;
     settings: GenerateSettings;
@@ -384,6 +456,7 @@ export async function generateFromPromptBox(
 export async function generateMissing(
   productId: string,
   payload: {
+    context?: Pick<ProductState, "selectedBackgroundId" | "selectedConstructionId">;
     settings: GenerateSettings;
     batchSize: number;
     referenceImages: string[];

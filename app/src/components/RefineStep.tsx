@@ -265,7 +265,6 @@ export function RefineStep({
                     className={mode === patternMode ? "isActive" : ""}
                     type="button"
                     aria-pressed={mode === patternMode}
-                    disabled={isBusy}
                     onClick={() => onPatternModeChange(mode)}
                     key={mode}
                   >
@@ -279,7 +278,6 @@ export function RefineStep({
                     className={size === imageSize ? "isActive" : ""}
                     type="button"
                     aria-pressed={size === imageSize}
-                    disabled={isBusy}
                     onClick={() => onImageSizeChange(size)}
                     key={size}
                   >
@@ -295,7 +293,6 @@ export function RefineStep({
                     aria-label={`Generate ${count} ${count === 1 ? "variation" : "variations"}`}
                     aria-pressed={count === variationCount}
                     title={`Generate ${count} ${count === 1 ? "variation" : "variations"}`}
-                    disabled={isBusy}
                     onClick={() => onVariationCountChange(count)}
                     key={count}
                   >
@@ -314,7 +311,7 @@ export function RefineStep({
                 customPalette={sosCustomPalette}
                 recentPalettes={refineSettings?.recentSosPalettes ?? []}
                 designChange={sosDesignChange}
-                disabled={isBusy}
+                disabled={busyAction === "loading-product"}
                 saving={busyAction === "save-sos-palette"}
                 onPaletteChange={onSosPaletteChange}
                 onCustomPaletteChange={onSosCustomPaletteChange}

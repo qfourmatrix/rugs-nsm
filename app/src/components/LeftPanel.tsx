@@ -10,8 +10,7 @@ import { JobLog } from "./JobLog";
 import type { LocatedAsset } from "../types";
 import { formatDateTime, isRunningJob, truncate } from "../utils";
 
-const INITIAL_VISIBLE_ATTEMPTS = 80;
-const LOAD_MORE_ATTEMPTS = 80;
+const ATTEMPTS_PER_PAGE = 80;
 const GRID_COLUMN_STORAGE_KEY = "product-shot-queue:left-grid-columns";
 const gridColumnOptions = [3, 4, 5] as const;
 
@@ -56,7 +55,7 @@ export function LeftPanel({
   onRetry,
   onCancelJob
 }: LeftPanelProps) {
-  const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_ATTEMPTS);
+  const [requestedPage, setRequestedPage] = useState(0);
   const [gridColumns, setGridColumns] = useState<GridColumnCount>(() => {
     const stored = window.localStorage.getItem(GRID_COLUMN_STORAGE_KEY);
     const parsed = stored ? Number.parseInt(stored, 10) : 4;
@@ -89,11 +88,13 @@ export function LeftPanel({
       ].sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()),
     [gridJobs, visibleAssets]
   );
-  const visibleItems = displayItems.slice(0, visibleLimit);
+  const pageCount = Math.max(1, Math.ceil(displayItems.length / ATTEMPTS_PER_PAGE));
+  const page = Math.min(requestedPage, pageCount - 1);
+  const visibleItems = displayItems.slice(page * ATTEMPTS_PER_PAGE, (page + 1) * ATTEMPTS_PER_PAGE);
   const eligibleDoneIds = assets.filter((asset) => asset.productId === product?.id && isBulkAcceptEligible(asset)).map((asset) => asset.assetId);
 
   useEffect(() => {
-    setVisibleLimit(INITIAL_VISIBLE_ATTEMPTS);
+    setRequestedPage(0);
   }, [product?.id, showTrash]);
 
   useEffect(() => {
@@ -169,6 +170,11 @@ export function LeftPanel({
           </div>
         ) : (
           <>
+            {pageCount > 1 ? <nav className="leftPanelTools" aria-label="Attempt pages">
+              <button className="miniButton" type="button" disabled={page === 0} onClick={() => setRequestedPage(page - 1)}>Newer attempts</button>
+              <span role="status">Page {page + 1} of {pageCount} · {displayItems.length} attempts</span>
+              <button className="miniButton" type="button" disabled={page === pageCount - 1} onClick={() => setRequestedPage(page + 1)}>Older attempts</button>
+            </nav> : null}
             <div className="attemptGrid" style={gridStyle}>
               {visibleItems.map((item) =>
                 item.type === "asset" ? (
@@ -193,20 +199,11 @@ export function LeftPanel({
                 )
               )}
             </div>
-            {displayItems.length > visibleItems.length ? (
-              <button
-                className="loadMoreAttempts"
-                type="button"
-                onClick={() => setVisibleLimit((limit) => limit + LOAD_MORE_ATTEMPTS)}
-              >
-                Show {Math.min(LOAD_MORE_ATTEMPTS, displayItems.length - visibleItems.length)} more
-              </button>
-            ) : null}
           </>
         )}
       </section>
 
-      <JobLog jobs={jobs} onCancelJob={onCancelJob} />
+      <JobLog key={product?.id ?? "none"} productId={product?.id} jobs={jobs} onCancelJob={onCancelJob} />
     </aside>
   );
 }

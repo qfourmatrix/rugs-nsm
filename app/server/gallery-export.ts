@@ -23,6 +23,7 @@ import { atomicWriteJson, ensureDir, regularFileExists, safeChildPath, sha256Fil
 import { isGalleryEligibleAsset, loadGallerySelection, UTILITY_SHOT_IDS } from "./gallery-store";
 import { loadMasterShots } from "./master-shots";
 import { scanProducts } from "./scanner";
+import { WorkScheduler } from "./work-scheduler";
 
 const EXPORT_STATE_DIR = ".product-shot-queue";
 const EXPORT_JOBS_DIR = "export-jobs";
@@ -30,6 +31,22 @@ const EXPORT_RECEIPTS_DIR = "export-receipts";
 const MAX_SHOPIFY_BYTES = 20_971_520;
 const MAX_SHOPIFY_DIMENSION = 4096;
 const UNDERSIZED_WARNING_DIMENSION = 2048;
+const conversionScheduler = new WorkScheduler(2, 16);
+const inspectionScheduler = new WorkScheduler(1, 8);
+const conversionCache = new Map<string, { file: string; sha256: string; info: { width: number; height: number }; bytes: number; touched: number }>();
+const conversionCacheSession = `export_cache_${randomUUID()}`;
+let conversionEncodes = 0;
+let conversionHits = 0;
+export function galleryConversionMetrics() { return { encodes: conversionEncodes, hits: conversionHits, entries: conversionCache.size }; }
+
+async function pruneConversions() {
+  let bytes = [...conversionCache.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+  for (const [key, entry] of conversionCache) {
+    if (conversionCache.size <= 64 && bytes <= 256 * 1024 * 1024 && Date.now() - entry.touched < 10 * 60 * 1000) continue;
+    conversionCache.delete(key); bytes -= entry.bytes;
+    await fs.rm(entry.file, { force: true });
+  }
+}
 
 export const GALLERY_EXPORT_ENCODER: GalleryExportEncoderSettings = {
   format: "webp",
@@ -153,13 +170,46 @@ function shopifyPipeline(sourcePath: string) {
     .webp({ preset: "photo", quality: 90, effort: 6, smartSubsample: true });
 }
 
-async function validateShopifyConversion(sourcePath: string) {
-  const { data, info } = await shopifyPipeline(sourcePath).toBuffer({ resolveWithObject: true });
+async function validateShopifyConversion(productRoot: string, sourcePath: string, sourceHash: string) {
+  return conversionScheduler.run(async () => {
+  if (await sha256File(sourcePath) !== sourceHash) throw conflictError("CONTENT_CHANGED", "Source image changed during export checks.");
+  const key = createHash("sha256").update(JSON.stringify([productRoot, sourceHash, GALLERY_EXPORT_ENCODER])).digest("hex");
+  await pruneConversions();
+  const cached = conversionCache.get(key);
+  if (cached) {
+    try {
+      const data = await fs.readFile(cached.file);
+      if (createHash("sha256").update(data).digest("hex") === cached.sha256) {
+        cached.touched = Date.now();
+        conversionCache.delete(key); conversionCache.set(key, cached);
+        conversionHits++;
+        return { data, info: cached.info };
+      }
+    } catch { /* A missing cache file is recoverable; source is still verified. */ }
+    conversionCache.delete(key);
+    await fs.rm(cached.file, { force: true });
+  }
+  const cacheDirectory = path.join(exportJobsDir(productRoot), conversionCacheSession);
+  await ensureDir(cacheDirectory);
+  const snapshot = path.join(cacheDirectory, `${randomUUID()}.source`);
+  await fs.copyFile(sourcePath, snapshot);
+  try {
+  if (await sha256File(snapshot) !== sourceHash) throw conflictError("CONTENT_CHANGED", "Source image changed while preparing conversion.");
+  conversionEncodes++;
+  const { data, info } = await shopifyPipeline(snapshot).toBuffer({ resolveWithObject: true });
   if (data.byteLength >= MAX_SHOPIFY_BYTES) {
     throw new Error("Shopify WebP is 20 MB or larger.");
   }
   if (info.width !== info.height) throw new Error("Shopify WebP is not square.");
+  const file = path.join(cacheDirectory, `${randomUUID()}.webp`);
+  await fs.writeFile(file, data, { flag: "wx" });
+  const previous = conversionCache.get(key);
+  if (previous) await fs.rm(previous.file, { force: true });
+  conversionCache.set(key, { file, sha256: createHash("sha256").update(data).digest("hex"), info: { width: info.width, height: info.height }, bytes: data.length, touched: Date.now() });
+  await pruneConversions();
   return { data, info };
+  } finally { await fs.rm(snapshot, { force: true }); }
+  });
 }
 
 async function resolveItem(
@@ -302,7 +352,7 @@ async function inspectShape({
       issues.push(issue(product, "warning", "UNDERSIZED_IMAGE", `${item.shotName} is ${item.sourceDimensions.width}px and will not be upscaled.`, item.asset?.assetId));
     }
     try {
-      await validateShopifyConversion(item.sourcePath);
+      await validateShopifyConversion(productRoot, item.sourcePath, item.sourceSha256);
     } catch (error) {
       issues.push(issue(product, "blocker", "SHOPIFY_CONVERSION_FAILED", `${item.shotName}: ${error instanceof Error ? error.message : "Shopify conversion failed."}`, item.asset?.assetId));
     }
@@ -322,7 +372,8 @@ async function inspectShape({
   return { summary, product, items };
 }
 
-async function inspectGalleryExport(productRoot: string, productIds: string[]) {
+async function inspectGalleryExport(productRoot: string, productIds: string[], signal?: AbortSignal) {
+  signal?.throwIfAborted();
   if (new Set(productIds).size !== productIds.length) {
     throw validationError("DUPLICATE_PRODUCT_SELECTION", "Each product shape can be selected only once.");
   }
@@ -334,7 +385,15 @@ async function inspectGalleryExport(productRoot: string, productIds: string[]) {
     return product;
   });
   const masterShots = (await loadMasterShots({ productRoot })).shots;
-  return Promise.all(products.map((product) => inspectShape({ productRoot, product, masterShots })));
+  return inspectionScheduler.run(async () => {
+    const inspected: InspectedShape[] = [];
+    for (const product of products) {
+      signal?.throwIfAborted();
+      inspected.push(await inspectShape({ productRoot, product, masterShots }));
+    }
+    signal?.throwIfAborted();
+    return inspected;
+  }, signal);
 }
 
 export async function preflightGalleryExport({
@@ -356,8 +415,8 @@ export async function preflightGalleryExport({
   };
 }
 
-async function writeShopifyFile(item: ResolvedExportItem, outputPath: string) {
-  const { data, info } = await validateShopifyConversion(item.sourcePath);
+async function writeShopifyFile(productRoot: string, item: ResolvedExportItem, outputPath: string) {
+  const { data, info } = await validateShopifyConversion(productRoot, item.sourcePath, item.sourceSha256);
   await fs.writeFile(outputPath, data, { flag: "wx" });
   const outputDimensions = { width: info.width, height: info.height };
   return {
@@ -380,17 +439,19 @@ export async function buildGalleryExport({
   productRoot,
   productIds,
   expectedFingerprints,
+  signal,
   exportId = `export_${randomUUID()}`,
   onProgress = () => undefined
 }: {
   productRoot: string;
   productIds: string[];
   expectedFingerprints?: Record<string, string>;
+  signal?: AbortSignal;
   exportId?: string;
   onProgress?: ProgressCallback;
 }): Promise<BuildResult> {
   const createdAt = new Date().toISOString();
-  const inspected = await inspectGalleryExport(productRoot, productIds);
+  const inspected = await inspectGalleryExport(productRoot, productIds, signal);
   for (const candidate of inspected) {
     if (expectedFingerprints && expectedFingerprints[candidate.product.id] !== candidate.summary.contentFingerprint) {
       candidate.summary.status = "skipped";
@@ -435,6 +496,7 @@ export async function buildGalleryExport({
     const shapeSegment = candidate.product.shape;
     const imageReceipts: GalleryExportImageReceipt[] = [];
     for (const item of candidate.items) {
+      signal?.throwIfAborted();
       // Freeze byte-identical originals before conversion/archive reads can race a main replacement.
       const originalSnapshot = safeChildPath(workDir, `${candidate.product.id}-${item.position}-original-${item.sourceFile}`);
       await fs.copyFile(item.sourcePath, originalSnapshot);
@@ -442,7 +504,8 @@ export async function buildGalleryExport({
       const shopifyFilename = outputName(candidate.product, item);
       const stagedName = `${candidate.product.id}-${item.position}-${shopifyFilename}`;
       const stagedPath = safeChildPath(workDir, stagedName);
-      const converted = await writeShopifyFile({ ...item, sourcePath: originalSnapshot }, stagedPath);
+      const converted = await writeShopifyFile(productRoot, { ...item, sourcePath: originalSnapshot }, stagedPath);
+      signal?.throwIfAborted();
       const originalArchivePath = `${familySegment}/${shapeSegment}/originals/${item.sourceFile}`;
       const shopifyArchivePath = `${familySegment}/${shapeSegment}/shopify/${shopifyFilename}`;
       imageReceipts.push({
@@ -508,6 +571,7 @@ export async function buildGalleryExport({
     report(`Packed ${entry.name}`);
   });
   await finalizeArchive(archive, output);
+  signal?.throwIfAborted();
   completed = total;
   report("ZIP ready to download");
 
@@ -549,11 +613,28 @@ export async function cleanupGalleryExportJobs(productRoot: string) {
 export class GalleryExportRegistry {
   private readonly jobs = new Map<string, GalleryExportJob>();
   private readonly builds = new Map<string, BuildResult>();
+  private readonly buildScheduler = new WorkScheduler(1, 3);
+  private readonly controllers = new Map<string, AbortController>();
 
-  constructor(private readonly productRoot: string) {}
+  constructor(private readonly productRoot: string, private readonly maxOutstanding = 8, private readonly retainedByteThreshold = 2 * 1024 ** 3) {
+    if (!Number.isSafeInteger(maxOutstanding) || maxOutstanding < 1 || !Number.isSafeInteger(retainedByteThreshold) || retainedByteThreshold < 1) throw new Error("Invalid export admission limits");
+  }
+
+  private assertArchiveCapacity() {
+    const retainedBytes = [...this.builds.values()].reduce((sum, build) => sum + build.receipt.archiveBytes, 0);
+    if (retainedBytes >= this.retainedByteThreshold) throw conflictError("EXPORT_DOWNLOAD_REQUIRED", "Undownloaded ZIPs have reached the export storage threshold. Download an existing export before building another. Existing ZIPs were preserved.");
+  }
 
   start(productIds: string[], expectedFingerprints?: Record<string, string>) {
+    if (this.buildScheduler.active && this.buildScheduler.queued >= 3) throw conflictError("EXPORT_QUEUE_FULL", "Three exports are already waiting. Wait for an export to finish before starting another.");
+    this.assertArchiveCapacity();
+    const outstanding = [...this.jobs.values()].filter(job => ["queued", "building", "ready"].includes(job.status)).length;
+    if (outstanding >= this.maxOutstanding) throw conflictError("EXPORT_DOWNLOAD_REQUIRED", "Too many exports are awaiting download. Download an existing export before starting another. Existing ZIPs were preserved.");
     const exportId = `export_${randomUUID()}`;
+    const controller = new AbortController();
+    this.controllers.set(exportId, controller);
+    const selectedProducts = [...productIds];
+    const selectedFingerprints = expectedFingerprints ? { ...expectedFingerprints } : undefined;
     const now = new Date().toISOString();
     const job: GalleryExportJob = {
       exportId,
@@ -561,12 +642,15 @@ export class GalleryExportRegistry {
       createdAt: now,
       updatedAt: now,
       archiveFilename: null,
-      progress: { completed: 0, total: 1, message: "Queued" },
+      progress: { completed: 0, total: 1, message: this.buildScheduler.active ? `Queued behind ${this.buildScheduler.queued + 1} export(s)` : "Queued" },
       error: null,
       receipt: null
     };
     this.jobs.set(exportId, job);
-    void this.run(exportId, productIds, expectedFingerprints);
+    // Freeze caller input while queued; later UI selection changes cannot retarget a build.
+    void this.buildScheduler.run(() => this.run(exportId, selectedProducts, selectedFingerprints, controller.signal), controller.signal).catch(error => {
+      this.jobs.set(exportId, { ...job, status: controller.signal.aborted ? "cancelled" : "failed", error: controller.signal.aborted ? null : error instanceof Error ? error.message : "Export failed.", progress: { ...job.progress, message: controller.signal.aborted ? "Export cancelled" : "Export failed" } });
+    }).finally(() => { this.controllers.delete(exportId); this.pruneCompleted(); });
     return structuredClone(job);
   }
 
@@ -574,6 +658,42 @@ export class GalleryExportRegistry {
     const job = this.jobs.get(exportId);
     if (!job) throw notFoundError("EXPORT_JOB_NOT_FOUND", "Export job not found.");
     return structuredClone(job);
+  }
+
+  availableDownloads() {
+    return [...this.builds.values()].map(({ receipt }) => ({
+      exportId: receipt.exportId, archiveFilename: receipt.archiveFilename,
+      archiveBytes: receipt.archiveBytes, completedAt: receipt.completedAt,
+      includedShapes: receipt.includedShapes, skippedShapes: receipt.skippedShapes
+    }));
+  }
+
+  private pruneCompleted() {
+    const completed = [...this.jobs.values()].filter(job => job.status === "downloaded" || job.status === "failed" || job.status === "cancelled");
+    for (const job of completed.slice(0, Math.max(0, completed.length - 200))) this.jobs.delete(job.exportId);
+  }
+
+  /** Counts only: diagnostics must not allocate/serialize all retained receipts. */
+  retentionStats() {
+    let receiptImages = 0;
+    let receiptShapes = 0;
+    for (const job of this.jobs.values()) {
+      for (const shape of job.receipt?.shapes ?? []) {
+        receiptShapes++;
+        receiptImages += shape.images.length;
+      }
+    }
+    return { jobs: this.jobs.size, readyArchives: this.builds.size, receiptShapes, receiptImages,
+      controllers: this.controllers.size, active: this.buildScheduler.active, queued: this.buildScheduler.queued,
+      conversionEntries: conversionCache.size };
+  }
+
+  cancel(exportId: string) {
+    const job = this.get(exportId);
+    if (job.status !== "queued" && job.status !== "building") return job;
+    this.controllers.get(exportId)?.abort(new Error("Export cancelled"));
+    this.jobs.set(exportId, { ...job, updatedAt: new Date().toISOString(), progress: { ...job.progress, message: "Cancellation requested; finishing current image safely" } });
+    return this.get(exportId);
   }
 
   download(exportId: string) {
@@ -598,25 +718,34 @@ export class GalleryExportRegistry {
       status: "downloaded",
       updatedAt: downloadedAt,
       progress: { ...job.progress, message: "Downloaded; temporary ZIP removed" },
-      receipt
+      // The authoritative receipt is persisted above. Keep terminal status light;
+      // the status API loads receipt details only when a client requests them.
+      receipt: null
     });
+    this.pruneCompleted();
   }
 
-  private async run(exportId: string, productIds: string[], expectedFingerprints?: Record<string, string>) {
+  private async run(exportId: string, productIds: string[], expectedFingerprints?: Record<string, string>, signal?: AbortSignal) {
     const current = this.jobs.get(exportId);
     if (!current) return;
     this.jobs.set(exportId, { ...current, status: "building", updatedAt: new Date().toISOString(), progress: { completed: 0, total: 1, message: "Preflighting selection" } });
     try {
+      // Another queued build may have crossed the threshold after admission.
+      // A single large export remains allowed; this is a between-build limit,
+      // not an image-size restriction or permission to remove a ready archive.
+      this.assertArchiveCapacity();
       const build = await buildGalleryExport({
         productRoot: this.productRoot,
         productIds,
         expectedFingerprints,
+        signal,
         exportId,
         onProgress: (progress) => {
           const job = this.jobs.get(exportId);
           if (job) this.jobs.set(exportId, { ...job, updatedAt: new Date().toISOString(), progress });
         }
       });
+      signal?.throwIfAborted();
       this.builds.set(exportId, build);
       const job = this.jobs.get(exportId) as GalleryExportJob;
       this.jobs.set(exportId, {
@@ -629,14 +758,17 @@ export class GalleryExportRegistry {
       });
     } catch (error) {
       await fs.rm(safeChildPath(exportJobsDir(this.productRoot), exportId), { recursive: true, force: true }).catch(() => undefined);
+      if (signal?.aborted) await fs.rm(receiptPath(this.productRoot, exportId), { force: true }).catch(() => undefined);
       const job = this.jobs.get(exportId) as GalleryExportJob;
       this.jobs.set(exportId, {
         ...job,
-        status: "failed",
+        status: signal?.aborted ? "cancelled" : "failed",
         updatedAt: new Date().toISOString(),
-        error: error instanceof Error ? error.message : "Export failed.",
-        progress: { ...job.progress, message: "Export failed" }
+        error: signal?.aborted ? null : error instanceof Error ? error.message : "Export failed.",
+        progress: { ...job.progress, message: signal?.aborted ? "Export cancelled; temporary files removed" : "Export failed" }
       });
+    } finally {
+      this.pruneCompleted();
     }
   }
 }

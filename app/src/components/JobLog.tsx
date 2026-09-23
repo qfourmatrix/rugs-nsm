@@ -1,13 +1,17 @@
 import { AlertTriangle, CheckCircle2, Circle, LoaderCircle, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { JobRecord } from "../../shared/types";
 import { formatDateTime } from "../utils";
+import { getJobHistory } from "../api";
 
 interface JobLogProps {
   jobs: JobRecord[];
   onCancelJob: (jobId: string) => void;
+  productId?: string;
 }
 
-export function JobLog({ jobs, onCancelJob }: JobLogProps) {
+export function JobLog({ jobs, onCancelJob, productId }: JobLogProps) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const sortedJobs = [...jobs].sort((left, right) => {
     const priorityDelta = jobPriority(right.status) - jobPriority(left.status);
     if (priorityDelta !== 0) return priorityDelta;
@@ -25,7 +29,7 @@ export function JobLog({ jobs, onCancelJob }: JobLogProps) {
           <p>
             {jobs.length === 0
               ? "No jobs for this product"
-              : `${jobs.length} product jobs - ${runningCount} active - ${failedCount} failed`}
+              : `${runningCount} active · ${failedCount} failed in recent history`}
           </p>
         </div>
       </div>
@@ -60,13 +64,53 @@ export function JobLog({ jobs, onCancelJob }: JobLogProps) {
           ))}
           {jobs.length > visibleJobs.length ? (
             <li className="jobItem jobMore">
-              Showing {visibleJobs.length} of {jobs.length} jobs
+              Showing {visibleJobs.length} of {jobs.length} recent and active jobs
             </li>
           ) : null}
         </ol>
       )}
+      {productId ? <>
+        <button className="miniButton" type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen(open => !open)}>
+          {historyOpen ? "Close job history" : "Browse job history"}
+        </button>
+        {historyOpen ? <JobHistory productId={productId} /> : null}
+      </> : null}
     </section>
   );
+}
+
+function JobHistory({ productId }: { productId: string }) {
+  const [cursors, setCursors] = useState<Array<number | undefined>>([undefined]);
+  const [page, setPage] = useState<{ jobs: JobRecord[]; nextCursor: number | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [retry, setRetry] = useState(0);
+  const before = cursors.at(-1);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setError(null); setPage(null);
+    void getJobHistory(productId, before, controller.signal).then(result => {
+      if (!controller.signal.aborted) setPage(result);
+    }).catch(error => {
+      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "History could not be loaded.");
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [productId, before, retry]);
+  return <section aria-label="Completed job history" aria-busy={loading}>
+    <p role="status">{loading ? "Loading history…" : `History page ${cursors.length} · ${page?.jobs.length ?? 0} completed jobs`}</p>
+    {error ? <p role="alert">{error} <button type="button" className="miniButton" onClick={() => setRetry(value => value + 1)}>Retry history</button></p> : null}
+    <ol className="jobList">
+      {page?.jobs.map(job => <li className={`jobItem status-${job.status}`} key={job.jobId}>
+        <span className="jobIcon">{jobIcon(job.status)}</span>
+        <div className="jobCopy"><strong>{job.message}</strong><span>{job.shotName ?? job.shotId} · {job.status} · {formatDateTime(job.updatedAt)}</span></div>
+      </li>)}
+    </ol>
+    {!loading && !error && page?.jobs.length === 0 ? <p>No completed jobs for this rug yet.</p> : null}
+    <nav aria-label="Job history pages">
+      <button type="button" className="miniButton" disabled={loading || cursors.length === 1} onClick={() => setCursors(values => values.slice(0, -1))}>Newer jobs</button>{" "}
+      <button type="button" className="miniButton" disabled={loading || page?.nextCursor == null} onClick={() => { if (page?.nextCursor != null) setCursors(values => [...values, page.nextCursor!]); }}>Older jobs</button>
+    </nav>
+  </section>;
 }
 
 function jobPriority(status: JobRecord["status"]) {

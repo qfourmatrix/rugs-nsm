@@ -1,0 +1,12 @@
+.completionStack { position: fixed; right: 24px; bottom: 46px; width: 112px; height: 130px; z-index: 45; touch-action: pan-y; transition: transform 220ms cubic-bezier(.16,1,.3,1), opacity 160ms ease-out; }
+.completionThumbnail { position: absolute; right: 0; bottom: 0; width: 112px; height: 130px; padding: 3px; border: 0; border-radius: 9px; background: var(--panel); box-shadow: 0 6px 20px #18223e35; overflow: hidden; transform: translate(calc(var(--depth) * -3px),calc(var(--depth) * -9px)) rotate(calc(var(--depth) * -3deg)); transition: transform 260ms cubic-bezier(.16,1,.3,1); touch-action: pan-y; }
+.completionThumbnail:disabled { opacity: 1; }
+.completionThumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: 6px; pointer-events: none; }
+.completionStack.isExpanded { width: min(356px,calc(100vw - 48px)); }
+.completionStack.isExpanded .completionThumbnail { width: min(112px,calc((100vw - 68px) / 3)); transform: translate(calc(var(--column) * -110%),calc(var(--row) * -110%)); }
+.completionStack.isDragging { transition: none; }
+.completionStack { animation: completionArrival 220ms cubic-bezier(.16,1,.3,1); }
+@keyframes completionArrival { from { opacity: .3; transform: translateX(14px) scale(.97); } to { opacity: 1; transform: none; } }
+.completionStack.isLeaving { transform: translateX(180px) !important; opacity: 0 !important; pointer-events: none; transition: transform 180ms ease-in, opacity 150ms ease-in; }
+.completionAnnouncement { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .completionStack, .completionThumbnail { transition: none; animation: none; } }

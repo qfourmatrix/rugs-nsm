@@ -15,10 +15,10 @@ import {
   XCircle
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { getAvailableGalleryDownloads, type AvailableGalleryDownload, type GalleryReceiptSummary } from "../api";
 import type {
   AssetRecord,
   GalleryExportJob,
-  GalleryExportReceipt,
   GalleryPreflight,
   GallerySelection,
   GeneratedResponse,
@@ -28,6 +28,7 @@ import type {
 } from "../../shared/types";
 import {
   galleryExportDownloadUrl,
+  cancelGalleryExport,
   getGalleryExportJob,
   getGalleryExportReceipts,
   getGallerySelection,
@@ -52,6 +53,8 @@ interface GalleryExportWorkspaceProps {
   masterShots: MasterShots | null;
   onClose: () => void;
   onGalleryChanged?: () => void;
+  initialExportId?: string | null;
+  onExportStarted?: (exportId: string) => void;
 }
 
 export function hasGalleryBase(product: ProductSummary) {
@@ -98,7 +101,9 @@ export function GalleryExportWorkspace({
   products,
   currentProduct,
   onClose,
-  onGalleryChanged
+  onGalleryChanged,
+  initialExportId,
+  onExportStarted
 }: GalleryExportWorkspaceProps) {
   const initialProduct = currentProduct ?? products[0] ?? null;
   const [selectedIds, setSelectedIds] = useState(() => toggleFamilySelection(products.filter((product) => product.familyId === initialProduct?.familyId), new Set()));
@@ -108,7 +113,18 @@ export function GalleryExportWorkspace({
   const [activeFamilyId, setActiveFamilyId] = useState(initialProduct?.familyId ?? "");
   const [preflight, setPreflight] = useState<GalleryPreflight | null>(null);
   const [exportJob, setExportJob] = useState<GalleryExportJob | null>(null);
-  const [receipts, setReceipts] = useState<GalleryExportReceipt[]>([]);
+  const initialExportIdRef = useRef(initialExportId);
+  const [restoringExport, setRestoringExport] = useState(Boolean(initialExportId));
+  const [receipts, setReceipts] = useState<GalleryReceiptSummary[]>([]);
+  const [receiptCursors, setReceiptCursors] = useState<Array<string | undefined>>([undefined]);
+  const [nextReceiptCursor, setNextReceiptCursor] = useState<string | null>(null);
+  const [receiptRetry, setReceiptRetry] = useState(0);
+  const receiptPageRef = useRef<HTMLSpanElement>(null);
+  const receiptCursor = receiptCursors.at(-1);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [receiptsLoading, setReceiptsLoading] = useState(false);
+  const [availableDownloads, setAvailableDownloads] = useState<AvailableGalleryDownload[]>([]);
+  const [downloadListError, setDownloadListError] = useState<string | null>(null);
   const [savingProducts, setSavingProducts] = useState<Set<string>>(new Set());
   const [checking, setChecking] = useState(false);
   const [startingExport, setStartingExport] = useState(false);
@@ -123,6 +139,29 @@ export function GalleryExportWorkspace({
   const autoDownloadedRef = useRef<string | null>(null);
   const issueRef = useRef<HTMLDivElement>(null);
   const [showHistory, setShowHistory] = useState(false);
+  useEffect(() => {
+    if (!showHistory) return;
+    const controller = new AbortController();
+    let inFlight = false;
+    let failures = 0, retryAt = 0;
+    const refresh = async () => {
+      if (inFlight || document.hidden || controller.signal.aborted || Date.now() < retryAt) return;
+      inFlight = true;
+      try {
+        const downloads = await getAvailableGalleryDownloads(controller.signal);
+        if (!controller.signal.aborted) { failures = 0; retryAt = 0; setAvailableDownloads(downloads); setDownloadListError(null); }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          retryAt = Date.now() + Math.min(30000, 5000 * 2 ** Math.min(++failures, 3));
+          setDownloadListError(getErrorMessage(error));
+        }
+      }
+      finally { inFlight = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [showHistory]);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [reviewTarget, setReviewTarget] = useState<string | null>(null);
   const previousProductsRef = useRef(products);
@@ -153,7 +192,7 @@ export function GalleryExportWorkspace({
   selectionFingerprintRef.current = selectionFingerprint;
   onCloseRef.current = onClose;
   const jobRunning = exportJob?.status === "queued" || exportJob?.status === "building";
-  const workflowLocked = checking || savingProducts.size > 0 || startingExport || jobRunning;
+  const workflowLocked = checking || savingProducts.size > 0 || startingExport || jobRunning || restoringExport;
   const preflightIsCurrent = Boolean(preflight && preflightFingerprint === selectionFingerprint);
   const unexpectedSkips = exportJob?.receipt?.shapes.filter((shape) => shape.status === "skipped" && !preflight?.shapes.some((checked) => checked.productId === shape.productId && checked.status === "skipped")) ?? [];
   const selectedImageCount = preflightIsCurrent && preflight
@@ -161,12 +200,25 @@ export function GalleryExportWorkspace({
     : selectedProductIds.every((id) => gallerySummaries[id])
       ? selectedProductIds.reduce((count, id) => count + gallerySummaries[id].assetIds.length + 1, 0)
       : null;
-  const closeLocked = workflowLocked;
+  // Accepted builds belong to the server. Only unfinished local writes/admission lock closing.
+  const closeLocked = checking || savingProducts.size > 0 || startingExport;
   const jobRunningRef = useRef(closeLocked);
 
   useEffect(() => {
     jobRunningRef.current = closeLocked;
   }, [closeLocked]);
+
+  useEffect(() => {
+    const id = initialExportIdRef.current;
+    if (!id) return;
+    const controller = new AbortController();
+    void getGalleryExportJob(id, controller.signal).then(job => {
+      if (!controller.signal.aborted) setExportJob(job);
+    }).catch(reason => {
+      if (!controller.signal.aborted) setError(`Could not restore the previous export: ${getErrorMessage(reason)}. No new export was started.`);
+    }).finally(() => { if (!controller.signal.aborted) setRestoringExport(false); });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -224,9 +276,24 @@ export function GalleryExportWorkspace({
     };
   }, []);
 
+  useEffect(() => { setReceiptCursors([undefined]); }, [showHistory, exportJob?.exportId, exportJob?.status]);
+
   useEffect(() => {
-    void getGalleryExportReceipts().then(setReceipts).catch(() => undefined);
-  }, []);
+    if (!showHistory) return;
+    const controller = new AbortController();
+    setReceiptsLoading(true);
+    setReceiptError(null);
+    setReceipts([]);
+    setNextReceiptCursor(null);
+    void getGalleryExportReceipts(controller.signal, receiptCursor).then(next => {
+      if (!controller.signal.aborted) { setReceipts(next.receipts); setNextReceiptCursor(next.nextCursor); }
+    }).catch(reason => {
+      if (!controller.signal.aborted) setReceiptError(getErrorMessage(reason));
+    }).finally(() => {
+      if (!controller.signal.aborted) setReceiptsLoading(false);
+    });
+    return () => controller.abort();
+  }, [showHistory, exportJob?.exportId, exportJob?.status, receiptCursor, receiptRetry]);
 
   useEffect(() => {
     const changedIds = products.filter((product) => {
@@ -281,24 +348,34 @@ export function GalleryExportWorkspace({
 
   useEffect(() => {
     if ((!jobRunning && exportJob?.status !== "ready") || !exportJob) return undefined;
-    let cancelled = false;
+    const controller = new AbortController();
+    let inFlight = false;
+    let failures = 0, retryAt = 0;
     const poll = async () => {
+      if (inFlight || document.hidden || controller.signal.aborted || Date.now() < retryAt) return;
+      inFlight = true;
       try {
-        const next = await getGalleryExportJob(exportJob.exportId);
-        if (!cancelled) {
+        const next = await getGalleryExportJob(exportJob.exportId, controller.signal);
+        if (!controller.signal.aborted) {
+          failures = 0; retryAt = 0;
           setExportJob(next);
           setError(null);
-          if (next.status === "downloaded" || next.status === "ready") void getGalleryExportReceipts().then(setReceipts).catch(() => undefined);
         }
       } catch (pollError) {
-        if (!cancelled) setError(getErrorMessage(pollError));
-      }
+        if (!controller.signal.aborted) {
+          retryAt = Date.now() + Math.min(30000, 800 * 2 ** Math.min(++failures, 6));
+          setError(getErrorMessage(pollError));
+        }
+      } finally { inFlight = false; }
     };
     const timer = window.setInterval(() => void poll(), 800);
+    const onVisible = () => { if (!document.hidden) { retryAt = 0; void poll(); } };
+    document.addEventListener("visibilitychange", onVisible);
     void poll();
     return () => {
-      cancelled = true;
+      controller.abort();
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [exportJob?.exportId, exportJob?.status]);
 
@@ -394,7 +471,9 @@ export function GalleryExportWorkspace({
     setStartingExport(true);
     try {
       const expectedFingerprints = Object.fromEntries(checked.shapes.filter((shape) => shape.contentFingerprint).map((shape) => [shape.productId, shape.contentFingerprint!]));
-      setExportJob(await startGalleryExport(productIds, expectedFingerprints));
+      const job = await startGalleryExport(productIds, expectedFingerprints);
+      setExportJob(job);
+      onExportStarted?.(job.exportId);
     } catch (exportError) {
       setError(getErrorMessage(exportError));
     } finally {
@@ -500,7 +579,20 @@ export function GalleryExportWorkspace({
                 </div>
               </div> : null}
               {showHistory ? <section className="galleryHistory"><div className="galleryPanelHeading"><strong>Recent exports</strong><button type="button" onClick={() => setShowHistory(false)}>Close history</button></div><p>Receipts are kept. Downloaded ZIPs are removed.</p>
-                {receipts.length === 0 ? <p>No exports yet.</p> : receipts.slice(0, 8).map((receipt) => <article key={receipt.exportId}><strong>{receipt.includedShapes} shapes · {formatBytes(receipt.archiveBytes)}</strong><span>{formatDateTime(receipt.completedAt)} · {receipt.downloadedAt ? "Downloaded" : "Built"}{receipt.skippedShapes ? ` · ${receipt.skippedShapes} skipped` : ""}</span></article>)}
+                {downloadListError ? <p role="alert">Could not check available ZIPs: {downloadListError}</p> : null}
+                {availableDownloads.map(download => <article key={`download-${download.exportId}`}>
+                  <strong>Awaiting download · {download.includedShapes} shapes · {formatBytes(download.archiveBytes)}</strong>
+                  <span>{formatDateTime(download.completedAt)}{download.skippedShapes ? ` · ${download.skippedShapes} shapes skipped` : ""}</span>
+                  <a className="gallerySecondaryButton" href={galleryExportDownloadUrl(download.exportId)} download={download.archiveFilename}>Download existing ZIP</a>
+                </article>)}
+                {receiptError ? <p role="alert">Could not load export history: {receiptError} <button type="button" onClick={() => { receiptPageRef.current?.focus(); setReceiptRetry(value => value + 1); }}>Retry history</button></p> : null}
+                {receiptsLoading ? <p role="status">Loading export history…</p> : !receiptError && receipts.length === 0 ? <p>No exports yet.</p> : null}
+                {receipts.map((receipt) => <article key={receipt.exportId}><strong>{receipt.includedShapes} shapes · {formatBytes(receipt.archiveBytes)}</strong><span>{formatDateTime(receipt.completedAt)} · {receipt.downloadedAt ? "Downloaded" : "Built"}{receipt.skippedShapes ? ` · ${receipt.skippedShapes} skipped` : ""}</span></article>)}
+                <nav aria-label="Export history pages" className="galleryPanelHeading">
+                  <button type="button" disabled={receiptsLoading || receiptCursors.length === 1} onClick={() => { receiptPageRef.current?.focus(); setReceiptCursors(current => current.slice(0, -1)); }}>Newer exports</button>
+                  <span role="status" tabIndex={-1} ref={receiptPageRef}>Page {receiptCursors.length}</span>
+                  <button type="button" disabled={receiptsLoading || !nextReceiptCursor} onClick={() => { if (nextReceiptCursor) { receiptPageRef.current?.focus(); setReceiptCursors(current => [...current, nextReceiptCursor]); } }}>Older exports</button>
+                </nav>
               </section> : null}
               {SHAPES.map((shape) => {
                 const product = activeFamily.find((candidate) => candidate.shape === shape);
@@ -520,6 +612,10 @@ export function GalleryExportWorkspace({
           {unexpectedSkips.length > 0 ? <div className="galleryExportError" role="alert"><AlertTriangle size={14} /><span>Files changed during export. {unexpectedSkips.map((shape) => `${shape.familyId} ${shapeLabel(shape.shape)}`).join(", ")} were left out. Review them, or download the {exportJob?.receipt?.includedShapes} valid shapes below.</span></div> : null}
           {preflightIsCurrent && preflight && (preflight.skippedCount === 0 || exportJob) && preflight.shapes.some((shape) => shape.issues.length > 0) ? <details className="galleryExportWarnings"><summary>{preflight.skippedCount ? `Export notes · ${preflight.skippedCount} skipped` : "Export notes (non-blocking)"}</summary><PreflightResults preflight={preflight} onReview={reviewShape} /></details> : null}
           {exportJob ? <ExportProgress job={exportJob} /> : null}
+          {restoringExport ? <p role="status">Restoring previous export…</p> : jobRunning ? <p>You can close this workspace and keep working. Reopen it to check this export.</p> : null}
+          {jobRunning && exportJob ? <button className="gallerySecondaryButton" type="button" onClick={() => {
+            void cancelGalleryExport(exportJob.exportId).then(setExportJob).catch(reason => setError(getErrorMessage(reason)));
+          }}>Cancel export</button> : null}
           <div className="galleryExportBarMain">
             <div className="galleryBatchSummary"><button type="button" aria-expanded={showBreakdown} onClick={() => setShowBreakdown((value) => !value)}>{selectedFamilies.size} rugs · {selectedProductIds.length} shape galleries · {selectedImageCount === null ? "Counting images…" : `${selectedImageCount} images`}</button><span>{selectedProductIds.length ? "Checks run automatically. Originals + Shopify WebPs in one ZIP." : "Choose rugs on the left. Green shapes are included by default."}</span></div>
             {selectedProductIds.length > 0 ? <button className="galleryTextButton" type="button" disabled={workflowLocked} onClick={() => setSelectedIds(new Set())}>Clear</button> : null}
@@ -770,7 +866,7 @@ function ExportProgress({ job }: { job: GalleryExportJob }) {
   const percent = job.progress.total > 0 ? Math.min(100, Math.round((job.progress.completed / job.progress.total) * 100)) : 0;
   return (
     <div className={`galleryJobProgress status-${job.status}`} aria-live="polite">
-      <div><strong>{job.status === "ready" ? "ZIP ready — download starting" : job.status === "downloaded" ? "Download complete" : job.status === "failed" ? "Export failed" : "Preparing your export"}</strong><span>{job.status === "ready" ? "If the download does not start, use Download ZIP." : job.progress.message}</span></div>
+      <div><strong>{job.status === "ready" ? "ZIP ready — download starting" : job.status === "downloaded" ? "Download complete" : job.status === "cancelled" ? "Export cancelled" : job.status === "failed" ? "Export failed" : "Preparing your export"}</strong><span>{job.status === "ready" ? "If the download does not start, use Download ZIP." : job.progress.message}</span></div>
       {job.status === "building" || job.status === "queued" ? <><progress max={100} value={percent}>{percent}%</progress><small>{percent}% · {job.progress.completed}/{job.progress.total} files</small></> : null}
       {job.error ? <small className="isError">{job.error}</small> : null}
       {job.receipt ? <small>{job.receipt.includedShapes} {job.receipt.includedShapes === 1 ? "shape exported" : "shapes exported"}{job.receipt.skippedShapes ? ` · ${job.receipt.skippedShapes} skipped` : ""}</small> : null}

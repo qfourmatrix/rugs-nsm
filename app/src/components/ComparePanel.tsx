@@ -9,7 +9,8 @@ import {
   Trash2
 } from "lucide-react";
 import type { ProductSummary } from "../../shared/types";
-import { imageUrl } from "../api";
+import { useEffect, useState } from "react";
+import { getGeneratedAsset, imageUrl } from "../api";
 import type { LocatedAsset } from "../types";
 import { formatDateTime } from "../utils";
 
@@ -29,7 +30,7 @@ interface ComparePanelProps {
 
 export function ComparePanel({
   product,
-  selectedAsset,
+  selectedAsset: summaryAsset,
   assets,
   actionDisabled,
   retryDisabled,
@@ -40,6 +41,24 @@ export function ComparePanel({
   onReject,
   onRetry
 }: ComparePanelProps) {
+  const detailKey = `${product?.id}:${summaryAsset?.assetId}:${summaryAsset?.location}:${summaryAsset?.detailsRevision}`;
+  const [details, setDetails] = useState<{ key: string; asset: LocatedAsset | null; error: string | null } | null>(null);
+  const [detailRetry, setDetailRetry] = useState(0);
+  useEffect(() => {
+    if (!product || !summaryAsset?.detailsOmitted) return;
+    const controller = new AbortController();
+    setDetails({ key: detailKey, asset: null, error: null });
+    void getGeneratedAsset(product.id, summaryAsset.assetId, controller.signal).then(result => {
+      if (!controller.signal.aborted) setDetails({ key: detailKey, asset: { ...result.asset, location: result.location }, error: null });
+    }).catch(reason => {
+      if (!controller.signal.aborted) setDetails({ key: detailKey, asset: null, error: reason instanceof Error ? reason.message : "Could not load image details." });
+    });
+    return () => controller.abort();
+  }, [detailKey, summaryAsset?.detailsOmitted, detailRetry]);
+  const loaded = details?.key === detailKey ? details : null;
+  const selectedAsset = summaryAsset?.detailsOmitted && loaded?.asset
+    ? { ...loaded.asset, status: summaryAsset.status, location: summaryAsset.location }
+    : summaryAsset;
   const selectedIndex = selectedAsset
     ? assets.findIndex((asset) => asset.assetId === selectedAsset.assetId)
     : -1;
@@ -166,7 +185,10 @@ export function ComparePanel({
       <div className="assetMetaStrip" aria-label="Generated asset metadata">
         <div>
           <strong>Prompt</strong>
-          <span>{selectedAsset.prompt}</span>
+          {selectedAsset.detailsOmitted ? loaded?.error
+            ? <span role="alert">Could not load full details: {loaded.error} <button type="button" onClick={() => setDetailRetry(value => value + 1)}>Retry details</button></span>
+            : <span role="status">Loading full details…</span>
+            : <span>{selectedAsset.prompt}</span>}
         </div>
         <div>
           <strong>Output</strong>
