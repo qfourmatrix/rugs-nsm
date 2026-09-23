@@ -1,11 +1,21 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../server/config";
+import { loadConfig, clampQueueConcurrency } from "../server/config";
+import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY } from "../shared/constants";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("portable app configuration", () => {
+  it("runs twelve generations by default and enforces the same upper bound", () => {
+    expect(loadConfig({ PROVIDER_MODE: "mock" }).defaultConcurrency).toBe(12);
+    expect(DEFAULT_CONCURRENCY).toBe(12);
+    expect(MAX_CONCURRENCY).toBe(12);
+    expect(clampQueueConcurrency(undefined)).toBe(12);
+    expect(clampQueueConcurrency(12)).toBe(12);
+    expect(clampQueueConcurrency(99)).toBe(12);
+    expect(clampQueueConcurrency(0)).toBe(1);
+  });
   it("defaults to the data folder beside the app on any Mac username", () => {
     const config = loadConfig({ PROVIDER_MODE: "mock" });
 
