@@ -386,11 +386,12 @@ export interface GalleryExportShapeReceipt {
 export interface GalleryExportEncoderSettings {
   format: "webp";
   preset: "photo";
-  quality: 90;
+  quality: number;
+  lossless?: boolean;
   effort: 6;
   smartSubsample: true;
   colourSpace: "srgb";
-  maximumDimension: 4096;
+  maximumDimension: number;
   maximumBytes: 20971520;
   withoutEnlargement: true;
   metadata: "stripped";
@@ -406,6 +407,7 @@ export interface GalleryExportReceipt {
   requestedProductIds: string[];
   notSelectedShapes?: { productId: string; familyId: string; shape: ProductShape }[];
   encoder: GalleryExportEncoderSettings;
+  preparation?: import("./export-preparation").ExportPreparation;
   shapes: GalleryExportShapeReceipt[];
   includedShapes: number;
   skippedShapes: number;

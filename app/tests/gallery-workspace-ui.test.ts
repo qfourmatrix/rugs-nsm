@@ -1,3 +1,4 @@
+import { DEFAULT_PREPARATION } from "../shared/export-preparation";
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -8,6 +9,7 @@ import * as api from "../src/api";
 
 vi.mock("../src/api", () => ({
   ApiError: class ApiError extends Error {},
+  getPhotoroomStatus: vi.fn(), getMainCutouts: vi.fn(), previewGalleryExport: vi.fn(), imageUrl: vi.fn(() => "/base.png"),
   getGalleryExportReceipts: vi.fn(), getGallerySelection: vi.fn(), getGenerated: vi.fn(),
   thumbnailUrl: vi.fn(() => "/thumb.png"), updateGallerySelection: vi.fn(), updateGalleryReadiness: vi.fn(), preflightGalleryExport: vi.fn(),
   startGalleryExport: vi.fn(), getGalleryExportJob: vi.fn(), galleryExportDownloadUrl: vi.fn()
@@ -32,6 +34,9 @@ function preflight(): GalleryPreflight { return { version: 1, checkedAt: "2026-0
 async function render() { await act(async () => root.render(createElement(GalleryExportWorkspace, { products, currentProduct: products[0], masterShots: null, onClose: vi.fn() }))); }
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  vi.mocked(api.getPhotoroomStatus).mockResolvedValue({ configured: false });
+  vi.mocked(api.getMainCutouts).mockResolvedValue([]);
   vi.mocked(api.getGalleryExportReceipts).mockResolvedValue({ receipts: [], nextCursor: null });
   vi.mocked(api.getGallerySelection).mockImplementation(async (id) => gallery(id));
   vi.mocked(api.getGenerated).mockResolvedValue({ active: [], trash: [], aggregates: {} });
@@ -78,15 +83,18 @@ describe("family-first gallery workspace", () => {
     expect(inclusion("area").checked).toBe(false);
     expect(container.querySelector(".galleryFamilyNotice")?.textContent).toContain("changed");
   });
-  it("checks and builds in one action with source fingerprints, and can retry failures", async () => {
+  it("opens preparation before checking and building with source fingerprints, and can retry failures", async () => {
     vi.mocked(api.preflightGalleryExport).mockResolvedValue(preflight());
     vi.mocked(api.startGalleryExport).mockRejectedValue(new Error("Fixture build interrupted"));
     await render();
     expect(action("Run preflight")).toBeUndefined();
     expect(action("Build ZIP")).toBeUndefined();
     await act(async () => action("Export selected").click());
-    expect(api.preflightGalleryExport).toHaveBeenCalledWith(["rug-a"]);
-    expect(api.startGalleryExport).toHaveBeenCalledWith(["rug-a"], { "rug-a": "fingerprint-main" });
+    expect(api.preflightGalleryExport).not.toHaveBeenCalled();
+    await act(async () => action("Continue to WebP").click());
+    await act(async () => action("Download ZIP").click());
+    expect(api.preflightGalleryExport).toHaveBeenCalledWith(["rug-a"], DEFAULT_PREPARATION);
+    expect(api.startGalleryExport).toHaveBeenCalledWith(["rug-a"], { "rug-a": "fingerprint-main" }, DEFAULT_PREPARATION);
     expect(container.textContent).toContain("Fixture build interrupted");
     await act(async () => inclusion("runner").click());
     expect(action("Export selected").disabled).toBe(false);
@@ -112,12 +120,15 @@ describe("family-first gallery workspace", () => {
     await render();
     await act(async () => inclusion("runner").click());
     await act(async () => action("Export selected").click());
+    expect(api.preflightGalleryExport).not.toHaveBeenCalled();
+    await act(async () => action("Continue to WebP").click());
+    await act(async () => action("Download ZIP").click());
     expect(api.startGalleryExport).not.toHaveBeenCalled();
     expect(container.querySelector(".galleryCheckIssues")?.textContent).toContain("Main image is not square.");
     await act(async () => action("Go fix it").click());
     expect(document.activeElement?.id).toBe("gallery-shape-rug-a--runner");
     await act(async () => action("Export 1 valid shape").click());
-    expect(api.startGalleryExport).toHaveBeenCalledWith(checked.productIds, { "rug-a": "fingerprint-main", "rug-a--runner": "bad-main" });
+    expect(api.startGalleryExport).toHaveBeenCalledWith(checked.productIds, { "rug-a": "fingerprint-main", "rug-a--runner": "bad-main" }, DEFAULT_PREPARATION);
   });
   it("keeps all-blocked selections editable and invalidates the error summary when selection changes", async () => {
     const checked = preflight();
@@ -125,6 +136,9 @@ describe("family-first gallery workspace", () => {
     vi.mocked(api.preflightGalleryExport).mockResolvedValue(checked);
     await render();
     await act(async () => action("Export selected").click());
+    expect(api.preflightGalleryExport).not.toHaveBeenCalled();
+    await act(async () => action("Continue to WebP").click());
+    await act(async () => action("Download ZIP").click());
     expect(container.textContent).toContain("No selected shapes passed");
     expect(api.startGalleryExport).not.toHaveBeenCalled();
     await act(async () => inclusion("area").click());
@@ -139,6 +153,9 @@ describe("family-first gallery workspace", () => {
     vi.mocked(api.galleryExportDownloadUrl).mockReturnValue("/download/fixture");
     await render();
     await act(async () => action("Export selected").click());
+    expect(api.preflightGalleryExport).not.toHaveBeenCalled();
+    await act(async () => action("Continue to WebP").click());
+    await act(async () => action("Download ZIP").click());
     expect(anchorClick).toHaveBeenCalledTimes(1);
     expect(action("Download ZIP")).toBeDefined();
     await act(async () => action("Recent exports").click());
@@ -150,7 +167,9 @@ describe("family-first gallery workspace", () => {
     vi.mocked(api.preflightGalleryExport).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     vi.mocked(api.startGalleryExport).mockRejectedValue(new Error("Fixture stop"));
     await render();
-    await act(async () => { action("Export selected").click(); action("Export selected").click(); });
+    await act(async () => action("Export selected").click());
+    await act(async () => action("Continue to WebP").click());
+    await act(async () => { action("Download ZIP").click(); action("Download ZIP").click(); });
     expect(api.preflightGalleryExport).toHaveBeenCalledTimes(1);
     expect(action("Checking images…").disabled).toBe(true);
     await act(async () => finish(preflight()));
@@ -183,6 +202,9 @@ describe("family-first gallery workspace", () => {
     });
     await render();
     await act(async () => action("Export selected").click());
+    expect(api.preflightGalleryExport).not.toHaveBeenCalled();
+    await act(async () => action("Continue to WebP").click());
+    await act(async () => action("Download ZIP").click());
     expect(api.startGalleryExport).not.toHaveBeenCalled();
     expect(container.textContent).toContain("changed since you reviewed it");
     expect(inclusion("area").checked).toBe(false);
@@ -199,6 +221,9 @@ describe("family-first gallery workspace", () => {
     vi.mocked(api.getGalleryExportJob).mockResolvedValue(job);
     await render();
     await act(async () => action("Export selected").click());
+    expect(api.preflightGalleryExport).not.toHaveBeenCalled();
+    await act(async () => action("Continue to WebP").click());
+    await act(async () => action("Download ZIP").click());
     expect(anchorClick).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Files changed during export");
     await act(async () => action("Download valid shapes").click());

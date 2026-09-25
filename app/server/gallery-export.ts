@@ -1,3 +1,6 @@
+import { resolveCutout } from "./main-image-cutouts";
+import { DEFAULT_PREPARATION, type ExportPreparation, type MainImageSettings, type ExportPreview } from "../shared/export-preparation";
+import { encodeExportImage, prepareExportImage } from "./export-image-pipeline";
 import { createWriteStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -157,23 +160,11 @@ async function inspectImage(filePath: string) {
   return { metadata, dimensions };
 }
 
-function shopifyPipeline(sourcePath: string) {
-  return sharp(sourcePath, { failOn: "error" })
-    .autoOrient()
-    .toColourspace("srgb")
-    .resize({
-      width: MAX_SHOPIFY_DIMENSION,
-      height: MAX_SHOPIFY_DIMENSION,
-      fit: "inside",
-      withoutEnlargement: true
-    })
-    .webp({ preset: "photo", quality: 90, effort: 6, smartSubsample: true });
-}
-
-async function validateShopifyConversion(productRoot: string, sourcePath: string, sourceHash: string) {
+async function validateShopifyConversion(productRoot: string, sourcePath: string, sourceHash: string, preparation = DEFAULT_PREPARATION, main?: MainImageSettings, productId?: string) {
   return conversionScheduler.run(async () => {
   if (await sha256File(sourcePath) !== sourceHash) throw conflictError("CONTENT_CHANGED", "Source image changed during export checks.");
-  const key = createHash("sha256").update(JSON.stringify([productRoot, sourceHash, GALLERY_EXPORT_ENCODER])).digest("hex");
+  const cutout = main?.cutoutId ? await resolveCutout(productRoot, productId!, main.cutoutId, sourceHash, true) : undefined;
+  const key = createHash("sha256").update(JSON.stringify([productRoot, sourceHash, GALLERY_EXPORT_ENCODER, preparation.webp, main, cutout?.record.outputSha256])).digest("hex");
   await pruneConversions();
   const cached = conversionCache.get(key);
   if (cached) {
@@ -192,11 +183,11 @@ async function validateShopifyConversion(productRoot: string, sourcePath: string
   const cacheDirectory = path.join(exportJobsDir(productRoot), conversionCacheSession);
   await ensureDir(cacheDirectory);
   const snapshot = path.join(cacheDirectory, `${randomUUID()}.source`);
-  await fs.copyFile(sourcePath, snapshot);
+  await fs.copyFile(cutout?.file ?? sourcePath, snapshot);
   try {
-  if (await sha256File(snapshot) !== sourceHash) throw conflictError("CONTENT_CHANGED", "Source image changed while preparing conversion.");
+  if (await sha256File(snapshot) !== (cutout?.record.outputSha256 ?? sourceHash)) throw conflictError("CONTENT_CHANGED", "Source image changed while preparing conversion.");
   conversionEncodes++;
-  const { data, info } = await shopifyPipeline(snapshot).toBuffer({ resolveWithObject: true });
+  const { data, info } = await encodeExportImage(snapshot, preparation.webp, main);
   if (data.byteLength >= MAX_SHOPIFY_BYTES) {
     throw new Error("Shopify WebP is 20 MB or larger.");
   }
@@ -240,11 +231,13 @@ async function resolveItem(
 async function inspectShape({
   productRoot,
   product,
-  masterShots
+  masterShots,
+  preparation = DEFAULT_PREPARATION
 }: {
   productRoot: string;
   product: ProductSummary;
   masterShots: Shot[];
+  preparation?: ExportPreparation;
 }): Promise<InspectedShape> {
   const issues: GalleryPreflightIssue[] = [];
   const items: ResolvedExportItem[] = [];
@@ -344,7 +337,12 @@ async function inspectShape({
   }
 
   for (const item of items) {
-    if (item.sourceDimensions.width !== item.sourceDimensions.height) {
+    const mainSettings = item.role === "main" ? preparation.mainImages[product.id] : undefined;
+    if (mainSettings && mainSettings.reviewedSourceSha256 !== item.sourceSha256) {
+      issues.push(issue(product, "blocker", "MAIN_REVIEW_REQUIRED", "Main image changed or has not been approved. Preview and approve its export preparation."));
+      continue;
+    }
+    if (item.sourceDimensions.width !== item.sourceDimensions.height && !(item.role === "main" && preparation.mainImages[product.id]?.frame)) {
       issues.push(issue(product, "blocker", "NON_SQUARE_IMAGE", `${item.shotName} is ${item.sourceDimensions.width}×${item.sourceDimensions.height}; square images are required.`, item.asset?.assetId));
       continue;
     }
@@ -352,7 +350,7 @@ async function inspectShape({
       issues.push(issue(product, "warning", "UNDERSIZED_IMAGE", `${item.shotName} is ${item.sourceDimensions.width}px and will not be upscaled.`, item.asset?.assetId));
     }
     try {
-      await validateShopifyConversion(productRoot, item.sourcePath, item.sourceSha256);
+      await validateShopifyConversion(productRoot, item.sourcePath, item.sourceSha256, preparation, item.role === "main" ? preparation.mainImages[product.id] : undefined, product.id);
     } catch (error) {
       issues.push(issue(product, "blocker", "SHOPIFY_CONVERSION_FAILED", `${item.shotName}: ${error instanceof Error ? error.message : "Shopify conversion failed."}`, item.asset?.assetId));
     }
@@ -366,13 +364,13 @@ async function inspectShape({
     itemCount: 1 + selectionAssetIds.length,
     galleryRevision,
     exportReady,
-    contentFingerprint: createHash("sha256").update(JSON.stringify({ galleryRevision, selectionAssetIds, sources: items.map((item) => [item.sourceFile, item.sourceSha256]) })).digest("hex"),
+    contentFingerprint: createHash("sha256").update(JSON.stringify({ preparation, galleryRevision, selectionAssetIds, sources: items.map((item) => [item.sourceFile, item.sourceSha256]) })).digest("hex"),
     issues
   };
   return { summary, product, items };
 }
 
-async function inspectGalleryExport(productRoot: string, productIds: string[], signal?: AbortSignal) {
+async function inspectGalleryExport(productRoot: string, productIds: string[], signal?: AbortSignal, preparation = DEFAULT_PREPARATION) {
   signal?.throwIfAborted();
   if (new Set(productIds).size !== productIds.length) {
     throw validationError("DUPLICATE_PRODUCT_SELECTION", "Each product shape can be selected only once.");
@@ -389,7 +387,7 @@ async function inspectGalleryExport(productRoot: string, productIds: string[], s
     const inspected: InspectedShape[] = [];
     for (const product of products) {
       signal?.throwIfAborted();
-      inspected.push(await inspectShape({ productRoot, product, masterShots }));
+      inspected.push(await inspectShape({ productRoot, product, masterShots, preparation }));
     }
     signal?.throwIfAborted();
     return inspected;
@@ -398,12 +396,14 @@ async function inspectGalleryExport(productRoot: string, productIds: string[], s
 
 export async function preflightGalleryExport({
   productRoot,
-  productIds
+  productIds,
+  preparation = DEFAULT_PREPARATION
 }: {
   productRoot: string;
   productIds: string[];
+  preparation?: ExportPreparation;
 }): Promise<GalleryPreflight> {
-  const inspected = await inspectGalleryExport(productRoot, productIds);
+  const inspected = await inspectGalleryExport(productRoot, productIds, undefined, preparation);
   const shapes = inspected.map((candidate) => candidate.summary);
   return {
     version: 1,
@@ -415,8 +415,8 @@ export async function preflightGalleryExport({
   };
 }
 
-async function writeShopifyFile(productRoot: string, item: ResolvedExportItem, outputPath: string) {
-  const { data, info } = await validateShopifyConversion(productRoot, item.sourcePath, item.sourceSha256);
+async function writeShopifyFile(productRoot: string, item: ResolvedExportItem, outputPath: string, preparation: ExportPreparation, main?: MainImageSettings, productId?: string) {
+  const { data, info } = await validateShopifyConversion(productRoot, item.sourcePath, item.sourceSha256, preparation, main, productId);
   await fs.writeFile(outputPath, data, { flag: "wx" });
   const outputDimensions = { width: info.width, height: info.height };
   return {
@@ -439,6 +439,7 @@ export async function buildGalleryExport({
   productRoot,
   productIds,
   expectedFingerprints,
+  preparation = DEFAULT_PREPARATION,
   signal,
   exportId = `export_${randomUUID()}`,
   onProgress = () => undefined
@@ -446,12 +447,13 @@ export async function buildGalleryExport({
   productRoot: string;
   productIds: string[];
   expectedFingerprints?: Record<string, string>;
+  preparation?: ExportPreparation;
   signal?: AbortSignal;
   exportId?: string;
   onProgress?: ProgressCallback;
 }): Promise<BuildResult> {
   const createdAt = new Date().toISOString();
-  const inspected = await inspectGalleryExport(productRoot, productIds, signal);
+  const inspected = await inspectGalleryExport(productRoot, productIds, signal, preparation);
   for (const candidate of inspected) {
     if (expectedFingerprints && expectedFingerprints[candidate.product.id] !== candidate.summary.contentFingerprint) {
       candidate.summary.status = "skipped";
@@ -504,7 +506,7 @@ export async function buildGalleryExport({
       const shopifyFilename = outputName(candidate.product, item);
       const stagedName = `${candidate.product.id}-${item.position}-${shopifyFilename}`;
       const stagedPath = safeChildPath(workDir, stagedName);
-      const converted = await writeShopifyFile(productRoot, { ...item, sourcePath: originalSnapshot }, stagedPath);
+      const converted = await writeShopifyFile(productRoot, { ...item, sourcePath: originalSnapshot }, stagedPath, preparation, item.role === "main" ? preparation.mainImages[candidate.product.id] : undefined, candidate.product.id);
       signal?.throwIfAborted();
       const originalArchivePath = `${familySegment}/${shapeSegment}/originals/${item.sourceFile}`;
       const shopifyArchivePath = `${familySegment}/${shapeSegment}/shopify/${shopifyFilename}`;
@@ -555,7 +557,8 @@ export async function buildGalleryExport({
     completedAt,
     requestedProductIds: [...productIds],
     notSelectedShapes,
-    encoder: GALLERY_EXPORT_ENCODER,
+    encoder: { ...GALLERY_EXPORT_ENCODER, ...preparation.webp },
+    preparation,
     shapes: receiptShapes,
     includedShapes: receiptShapes.filter((shape) => shape.status === "included").length,
     skippedShapes: receiptShapes.filter((shape) => shape.status === "skipped").length
@@ -625,7 +628,7 @@ export class GalleryExportRegistry {
     if (retainedBytes >= this.retainedByteThreshold) throw conflictError("EXPORT_DOWNLOAD_REQUIRED", "Undownloaded ZIPs have reached the export storage threshold. Download an existing export before building another. Existing ZIPs were preserved.");
   }
 
-  start(productIds: string[], expectedFingerprints?: Record<string, string>) {
+  start(productIds: string[], expectedFingerprints?: Record<string, string>, preparation = DEFAULT_PREPARATION) {
     if (this.buildScheduler.active && this.buildScheduler.queued >= 3) throw conflictError("EXPORT_QUEUE_FULL", "Three exports are already waiting. Wait for an export to finish before starting another.");
     this.assertArchiveCapacity();
     const outstanding = [...this.jobs.values()].filter(job => ["queued", "building", "ready"].includes(job.status)).length;
@@ -633,6 +636,7 @@ export class GalleryExportRegistry {
     const exportId = `export_${randomUUID()}`;
     const controller = new AbortController();
     this.controllers.set(exportId, controller);
+    const selectedPreparation = structuredClone(preparation);
     const selectedProducts = [...productIds];
     const selectedFingerprints = expectedFingerprints ? { ...expectedFingerprints } : undefined;
     const now = new Date().toISOString();
@@ -648,7 +652,7 @@ export class GalleryExportRegistry {
     };
     this.jobs.set(exportId, job);
     // Freeze caller input while queued; later UI selection changes cannot retarget a build.
-    void this.buildScheduler.run(() => this.run(exportId, selectedProducts, selectedFingerprints, controller.signal), controller.signal).catch(error => {
+    void this.buildScheduler.run(() => this.run(exportId, selectedProducts, selectedFingerprints, controller.signal, selectedPreparation), controller.signal).catch(error => {
       this.jobs.set(exportId, { ...job, status: controller.signal.aborted ? "cancelled" : "failed", error: controller.signal.aborted ? null : error instanceof Error ? error.message : "Export failed.", progress: { ...job.progress, message: controller.signal.aborted ? "Export cancelled" : "Export failed" } });
     }).finally(() => { this.controllers.delete(exportId); this.pruneCompleted(); });
     return structuredClone(job);
@@ -725,7 +729,7 @@ export class GalleryExportRegistry {
     this.pruneCompleted();
   }
 
-  private async run(exportId: string, productIds: string[], expectedFingerprints?: Record<string, string>, signal?: AbortSignal) {
+  private async run(exportId: string, productIds: string[], expectedFingerprints?: Record<string, string>, signal?: AbortSignal, preparation = DEFAULT_PREPARATION) {
     const current = this.jobs.get(exportId);
     if (!current) return;
     this.jobs.set(exportId, { ...current, status: "building", updatedAt: new Date().toISOString(), progress: { completed: 0, total: 1, message: "Preflighting selection" } });
@@ -738,6 +742,7 @@ export class GalleryExportRegistry {
         productRoot: this.productRoot,
         productIds,
         expectedFingerprints,
+        preparation,
         signal,
         exportId,
         onProgress: (progress) => {
@@ -771,4 +776,33 @@ export class GalleryExportRegistry {
       this.pruneCompleted();
     }
   }
+}
+
+
+export async function previewGalleryExportImage(productRoot: string, productId: string, assetId: string | undefined, preparation: ExportPreparation): Promise<ExportPreview> {
+  const product = (await scanProducts({ productRoot })).products.find(product => product.id === productId);
+  if (!product) throw notFoundError("UNKNOWN_PRODUCT", "Unknown product.");
+  let sourcePath: string;
+  if (assetId) {
+    const gallery = await loadGallerySelection({ productRoot, productId, verifyContent: true });
+    if (!gallery.assetIds.includes(assetId)) throw validationError("IMAGE_NOT_SELECTED", "Choose an image included in this gallery.");
+    const { asset, location } = await getAssetRecord({ productRoot, productId, assetId });
+    if (location !== "generated" || !isGalleryEligibleAsset(asset) || !asset.output?.file) throw validationError("INVALID_PREVIEW_IMAGE", "Choose an accepted gallery image.");
+    sourcePath = safeChildPath(generatedDir(productRoot, productId), asset.output.file);
+  } else {
+    if (!product.baseImage) throw validationError("MISSING_MAIN_IMAGE", "Main image is missing.");
+    sourcePath = safeChildPath(path.join(productRoot, productId), product.baseImage);
+  }
+  if (!(await regularFileExists(sourcePath))) throw validationError("INVALID_PREVIEW_IMAGE", "Image is not a regular file.");
+  return conversionScheduler.run(async () => {
+    const source = await fs.readFile(sourcePath);
+    const main = assetId ? undefined : preparation.mainImages[productId];
+    const sourceHash = createHash("sha256").update(source).digest("hex");
+    const cutout = main?.cutoutId ? await resolveCutout(productRoot, productId, main.cutoutId, sourceHash, false) : undefined;
+    const imageSource = cutout ? await fs.readFile(cutout.file) : source;
+    const { data, info } = await encodeExportImage(imageSource, preparation.webp, main);
+    const prepared = await prepareExportImage(imageSource, main);
+    const reference = await sharp(prepared).resize({ width: info.width, height: info.height, fit: "inside", withoutEnlargement: true }).png().toBuffer();
+    return { image: `data:image/webp;base64,${data.toString("base64")}`, reference: `data:image/png;base64,${reference.toString("base64")}`, sourceBytes: source.length, outputBytes: data.length, width: info.width, height: info.height, sourceSha256: createHash("sha256").update(source).digest("hex") };
+  });
 }

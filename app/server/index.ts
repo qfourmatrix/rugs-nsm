@@ -1,3 +1,6 @@
+import { approveCutout, createCutout, listCutouts, CutoutApprovalSchema, CutoutRequestSchema } from "./main-image-cutouts";
+import { ExportPreviewSchema } from "../shared/export-preparation";
+import { previewGalleryExportImage } from "./gallery-export";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import express from "express";
@@ -1599,11 +1602,29 @@ app.post(
   })
 );
 
+app.get("/api/gallery-exports/photoroom", (_req, res) => res.json({ configured: Boolean(process.env.PHOTOROOM_API_KEY?.trim()) }));
+app.get("/api/products/:productId/main-cutouts", asyncRoute(async (req, res) => {
+  res.json({ cutouts: await listCutouts(config.productRoot, req.params.productId as string) });
+}));
+app.post("/api/gallery-exports/cutouts", asyncRoute(async (req, res) => {
+  const parsed = CutoutRequestSchema.parse(req.body ?? {});
+  res.json({ cutout: await createCutout(config.productRoot, parsed.productId, parsed.requestId, process.env.PHOTOROOM_API_KEY?.trim()) });
+}));
+app.patch("/api/gallery-exports/cutouts/:id/approval", asyncRoute(async (req, res) => {
+  const parsed = CutoutApprovalSchema.parse(req.body ?? {});
+  res.json({ cutout: await approveCutout(config.productRoot, req.params.id as string, parsed.approved) });
+}));
+
+app.post("/api/gallery-exports/preview", asyncRoute(async (req, res) => {
+  const parsed = ExportPreviewSchema.parse(req.body ?? {});
+  res.json({ preview: await previewGalleryExportImage(config.productRoot, parsed.productId, parsed.assetId, parsed.preparation) });
+}));
+
 app.post(
   "/api/gallery-exports/preflight",
   asyncRoute(async (req, res) => {
     const parsed = GalleryExportSelectionSchema.parse(req.body ?? {});
-    res.json({ preflight: await preflightGalleryExport({ productRoot: config.productRoot, productIds: parsed.productIds }) });
+    res.json({ preflight: await preflightGalleryExport({ productRoot: config.productRoot, productIds: parsed.productIds, preparation: parsed.preparation }) });
   })
 );
 
@@ -1621,7 +1642,7 @@ app.post(
     const knownIds = new Set((await productsWithCounts()).map((product) => product.id));
     const unknownId = parsed.productIds.find((productId) => !knownIds.has(productId));
     if (unknownId) throw notFoundError("UNKNOWN_PRODUCT", `Unknown product: ${unknownId}`);
-    res.status(202).json({ exportJob: galleryExports.start(parsed.productIds, parsed.expectedFingerprints) });
+    res.status(202).json({ exportJob: galleryExports.start(parsed.productIds, parsed.expectedFingerprints, parsed.preparation) });
   })
 );
 

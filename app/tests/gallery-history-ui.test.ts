@@ -8,6 +8,7 @@ import type { GalleryExportJob, ProductSummary } from "../shared/types";
 
 vi.mock("../src/api", async importOriginal => ({
   ...await importOriginal<typeof import("../src/api")>(),
+  getPhotoroomStatus: vi.fn(async () => ({ configured: false })), getMainCutouts: vi.fn(async () => []),
   getGalleryExportReceipts: vi.fn(),
   getAvailableGalleryDownloads: vi.fn(), getGalleryExportJob: vi.fn(), getGallerySelection: vi.fn(),
   getGenerated: vi.fn(), preflightGalleryExport: vi.fn(), startGalleryExport: vi.fn()
@@ -115,6 +116,9 @@ it("never overlaps slow export polls, skips hidden tabs and aborts on unmount", 
   const exportButton = [...container.querySelectorAll("button")].find(button => button.textContent === "Export selected")!;
   expect(exportButton.disabled).toBe(false);
   await act(async () => exportButton.click());
+  await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Continue to WebP")!.click());
+  const buildButton = [...container.querySelectorAll("button")].find(button => button.textContent === "Download ZIP")!;
+  await act(async () => buildButton.click());
   expect(getGalleryExportJob).toHaveBeenCalledTimes(1);
   expect(onExportStarted).toHaveBeenCalledWith("export_test");
   const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close gallery export"]')!;
