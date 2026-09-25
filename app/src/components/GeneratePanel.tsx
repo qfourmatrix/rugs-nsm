@@ -15,7 +15,8 @@ import {
   Sparkles,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { BackgroundRecommendationsResponse } from "../../shared/background-recommendations";
 import { BACKGROUND_REQUIRED_SHOT_IDS, LABEL_REQUIRED_SHOT_IDS, RUG_CONSTRUCTION_OPTIONS } from "../../shared/constants";
 import { compatibleBackgroundsForShot, isBackgroundCompatibleForShot, isRunnerRoomShotId } from "../../shared/background-compatibility";
 import { normalizeBackgroundType, resolveShotBackgroundTypeOverride } from "../../shared/contextual-prompts";
@@ -31,7 +32,7 @@ import type {
   Shot,
   ShotAggregateState
 } from "../../shared/types";
-import { backgroundPreviewUrl, thumbnailUrl } from "../api";
+import { backgroundPreviewUrl, getBackgroundRecommendations, thumbnailUrl } from "../api";
 import { aggregateLabels, isProductGeneratable, pluralize, truncate } from "../utils";
 import { MasterShotEditor } from "./MasterShotEditor";
 import { PromptSettings } from "./PromptSettings";
@@ -677,11 +678,61 @@ export function BackgroundLibraryPanel({
   const [labelDraft, setLabelDraft] = useState(library?.labelLogoPath ?? "");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [filter, setFilter] = useState<
-    "all" | "new" | "used" | "foyer" | "hallway" | "living" | "bedroom"
+    "recommended" | "all" | "new" | "used" | "foyer" | "hallway" | "living" | "bedroom"
   >("all");
   const [query, setQuery] = useState("");
   const [shuffledBackgroundIds, setShuffledBackgroundIds] = useState<string[] | null>(null);
   const [requestedBackgroundPage, setRequestedBackgroundPage] = useState(0);
+  const [recommendationResult, setRecommendationResult] = useState<{ key: string; data: BackgroundRecommendationsResponse | null; failed: boolean } | null>(null);
+  const [recommendationRefresh, setRecommendationRefresh] = useState(0);
+  const recommendationKey = JSON.stringify([product?.id, product?.shape, product?.baseImage, selectedShot?.id]);
+  const recommendations = recommendationResult?.key === recommendationKey ? recommendationResult.data : null;
+  const recommendationFailed = recommendationResult?.key === recommendationKey && recommendationResult.failed;
+  const recommendationLoading = pickerOpen && !recommendations && !recommendationFailed;
+  const pickerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!pickerOpen || !product) return;
+    const controller = new AbortController();
+    let active = true;
+    setRecommendationResult(null);
+    void getBackgroundRecommendations(product.id, selectedShot?.id, controller.signal).then(data => {
+      if (active && data.productId === product.id) setRecommendationResult({ key: recommendationKey, data, failed: false });
+      else if (active) setRecommendationResult({ key: recommendationKey, data: null, failed: true });
+    }).catch(() => {
+      if (active) setRecommendationResult({ key: recommendationKey, data: null, failed: true });
+    });
+    return () => { active = false; controller.abort(); };
+  }, [pickerOpen, recommendationKey, recommendationRefresh, library?.scannedAt]);
+
+  useEffect(() => {
+    setFilter("all");
+    setQuery("");
+    setShuffledBackgroundIds(null);
+  }, [product?.id]);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => pickerRef.current?.querySelector<HTMLButtonElement>(".backgroundFilters .isActive")?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setPickerOpen(false); }
+      if (event.key !== "Tab") return;
+      const controls = [...(pickerRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), [tabindex='0']") ?? [])];
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [pickerOpen]);
 
   useEffect(() => {
     setManifestDraft(library?.manifestPath ?? "");
@@ -721,12 +772,20 @@ export function BackgroundLibraryPanel({
     });
     return [...shuffled, ...byId.values()];
   }, [backgrounds, shuffledBackgroundIds]);
+  const recommendationById = useMemo(() => new Map((recommendations?.recommendations ?? []).map(item => [item.backgroundId, item])), [recommendations]);
+  const recommendedBackgrounds = useMemo(() => {
+    const byId = new Map(backgrounds.map(background => [background.id, background]));
+    return (recommendations?.recommendations ?? []).flatMap(item => {
+      const background = byId.get(item.backgroundId);
+      return background ? [background] : [];
+    });
+  }, [backgrounds, recommendations]);
   const filteredBackgrounds = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return orderedBackgrounds.filter((background) => {
+    return (filter === "recommended" ? recommendedBackgrounds : orderedBackgrounds).filter((background) => {
       const type = background.type.toLowerCase();
       const matchesFilter =
-        filter === "all" ||
+        filter === "all" || filter === "recommended" ||
         background.status === filter ||
         (filter === "foyer" && type.includes("foyer")) ||
         (filter === "hallway" && (type.includes("hallway") || type.includes("corridor"))) ||
@@ -739,11 +798,12 @@ export function BackgroundLibraryPanel({
         background.id.toLowerCase().includes(normalizedQuery);
       return matchesFilter && matchesQuery;
     });
-  }, [filter, orderedBackgrounds, query]);
+  }, [filter, orderedBackgrounds, recommendedBackgrounds, query]);
   const backgroundPageCount = Math.max(1, Math.ceil(filteredBackgrounds.length / BACKGROUND_PAGE_SIZE));
   const backgroundPage = Math.min(requestedBackgroundPage, backgroundPageCount - 1);
   const visibleBackgrounds = filteredBackgrounds.slice(backgroundPage * BACKGROUND_PAGE_SIZE, (backgroundPage + 1) * BACKGROUND_PAGE_SIZE);
   const shuffleBackgrounds = () => {
+    setFilter("all");
     setShuffledBackgroundIds((current) => shuffleBackgroundIds(backgrounds.map((background) => background.id), current));
     setPickerOpen(true);
   };
@@ -888,21 +948,21 @@ export function BackgroundLibraryPanel({
 
       {pickerOpen ? (
         <div className="modalOverlay" role="presentation">
-          <section className="backgroundPickerModal" role="dialog" aria-modal="true" aria-label="Choose background">
+          <section ref={pickerRef} className="backgroundPickerModal" role="dialog" aria-modal="true" aria-label="Choose background">
             <div className="modalHeader">
               <div>
                 <h2>Choose Background</h2>
                 <p role="status">
-                  {filteredBackgrounds.length ? `${backgroundPage * BACKGROUND_PAGE_SIZE + 1}–${backgroundPage * BACKGROUND_PAGE_SIZE + visibleBackgrounds.length}` : "0"} of {filteredBackgrounds.length} · Page {backgroundPage + 1} of {backgroundPageCount}
+                  {filter === "recommended" ? recommendationLoading ? "Loading recommendations…" : `${filteredBackgrounds.length} recommended for ${product?.name ?? "this rug"}` : <>{filteredBackgrounds.length ? `${backgroundPage * BACKGROUND_PAGE_SIZE + 1}–${backgroundPage * BACKGROUND_PAGE_SIZE + visibleBackgrounds.length}` : "0"} of {filteredBackgrounds.length} · Page {backgroundPage + 1} of {backgroundPageCount}</>}
                 </p>
               </div>
               <div className="backgroundPickerHeaderActions">
-                <button className="miniButton" type="button" aria-label="Previous backgrounds" disabled={backgroundPage === 0} onClick={() => setRequestedBackgroundPage(backgroundPage - 1)}>Previous</button>
+                {filter !== "recommended" ? <><button className="miniButton" type="button" aria-label="Previous backgrounds" disabled={backgroundPage === 0} onClick={() => setRequestedBackgroundPage(backgroundPage - 1)}>Previous</button>
                 <button className="miniButton" type="button" aria-label="Next backgrounds" disabled={backgroundPage + 1 >= backgroundPageCount} onClick={() => setRequestedBackgroundPage(backgroundPage + 1)}>Next</button>
                 <button className="miniButton" type="button" onClick={shuffleBackgrounds}>
                   <Shuffle size={14} />
                   <span>Shuffle</span>
-                </button>
+                </button></> : null}
                 <button className="iconButton" type="button" aria-label="Close background picker" onClick={() => setPickerOpen(false)}>
                   <X size={15} />
                 </button>
@@ -910,29 +970,35 @@ export function BackgroundLibraryPanel({
             </div>
 
             <div className="backgroundFilters">
-              {(["all", "new", "used", "foyer", "hallway", "living", "bedroom"] as const).map((item) => (
+              {(["recommended", "all", "new", "used", "foyer", "hallway", "living", "bedroom"] as const).map((item) => (
                 <button
                   key={item}
                   type="button"
                   className={filter === item ? "isActive" : ""}
+                  aria-pressed={filter === item}
                   onClick={() => setFilter(item)}
                 >
-                  {item}
+                  {item === "recommended" ? `Recommended${recommendedBackgrounds.length ? ` (${recommendedBackgrounds.length})` : ""}` : item}
                 </button>
               ))}
               <input
+                aria-label="Search backgrounds"
                 value={query}
                 placeholder="Search"
                 onChange={(event) => setQuery(event.target.value)}
               />
             </div>
 
-            <div className="backgroundGrid">
-              {visibleBackgrounds.map((background) => (
+            <div className={`backgroundGrid ${filter === "recommended" ? "backgroundRecommendedGrid" : ""}`} aria-busy={filter === "recommended" && recommendationLoading}>
+              {filter === "recommended" && recommendedBackgrounds.length > 0 ? <p className="backgroundRecommendationIntro">Ranked for this rug’s colors, pattern and shape.{recommendations?.unavailableCount ? ` ${recommendations.unavailableCount} ${recommendations.unavailableCount === 1 ? "pick is" : "picks are"} no longer available in this library.` : ""}</p> : null}
+              {visibleBackgrounds.map((background) => {
+                const recommendation = filter === "recommended" ? recommendationById.get(background.id) : null;
+                return (
                 <button
                   key={background.id}
                   type="button"
-                  className={`backgroundCard ${selectedBackgroundId === background.id ? "isSelected" : ""}`}
+                  className={`backgroundCard ${recommendation ? "backgroundRecommendationCard" : ""} ${selectedBackgroundId === background.id ? "isSelected" : ""}`}
+                  aria-pressed={selectedBackgroundId === background.id}
                   onClick={() => {
                     onBackgroundChange(background.id);
                     setPickerOpen(false);
@@ -951,18 +1017,28 @@ export function BackgroundLibraryPanel({
                       <span>No preview</span>
                     )}
                   </div>
-                  <div className="backgroundMetaOverlay">
+                  {recommendation ? <div className="backgroundRecommendationMeta">
+                    <strong>{recommendation.rank}. {background.title.split(" - ")[0]}</strong>
+                    <span>{recommendation.reason}</span>
+                    <span className={`statusPill status-${background.status}`}>{backgroundStatusLabel(background.status)}</span>
+                  </div> : <div className="backgroundMetaOverlay">
                     <strong>{background.title}</strong>
                     <span>{background.runnerArchetype ?? background.type}</span>
                     <span className={`statusPill status-${background.status}`}>
                       {backgroundStatusLabel(background.status)}
                     </span>
-                  </div>
+                  </div>}
                 </button>
-              ))}
+              ); })}
               {visibleBackgrounds.length === 0 ? (
                 <div className="backgroundEmptyState">
-                  {runnerShotScope && backgrounds.length === 0
+                  {filter === "recommended" ? <>
+                    <span>{recommendationLoading ? "Finding your saved picks…" : recommendationFailed ? "Couldn’t load recommendations. Try again or browse all backgrounds." : recommendations?.status === "stale" ? "This rug image has changed since its picks were curated." : recommendations?.status === "not_applicable" ? "This shot uses a studio background. Choose a room shot to see recommendations." : recommendations?.status === "unavailable" ? "These recommendations aren’t available in the current library." : recommendedBackgrounds.length ? "No recommendations match your search." : "Recommendations haven’t been curated for this rug yet."}</span>
+                    {!recommendationLoading ? <div className="backgroundRecommendationEmptyActions">
+                      {recommendationFailed ? <button type="button" className="miniButton" onClick={() => setRecommendationRefresh(value => value + 1)}>Try again</button> : null}
+                      <button type="button" className="miniButton" onClick={() => { setFilter("all"); setQuery(""); }}>Browse all backgrounds</button>
+                    </div> : null}
+                  </> : runnerShotScope && backgrounds.length === 0
                     ? "No Runner Foyer or Hallway backgrounds are connected."
                     : "No backgrounds match this filter."}
                 </div>

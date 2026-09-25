@@ -1,0 +1,10 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { BackgroundRecommendationsPackSchema } from '../shared/background-recommendations';
+import { importBackgroundRecommendations } from '../server/background-recommendations-import';
+const [catalog,source,flag,...extra]=process.argv.slice(2);
+if(!catalog || !source || (flag && flag!=='--apply') || extra.length)throw new Error('Usage: tsx scripts/import-background-recommendations.ts CATALOG PACK.json [--apply]. Default is a read-only preview.');
+const info=await fs.stat(source);
+if(!info.isFile() || info.size>4*1024*1024)throw new Error('Pack must be a file under 4 MB.');
+const pack=BackgroundRecommendationsPackSchema.parse(JSON.parse(await fs.readFile(source,'utf8')));
+console.log(JSON.stringify(await importBackgroundRecommendations({productRoot:path.resolve(catalog),pack,apply:flag==='--apply'}),null,2));

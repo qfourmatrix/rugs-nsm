@@ -3074,10 +3074,21 @@ body.isResizingPanels {
 }
 
 .backgroundFilters {
-  display: grid;
-  grid-template-columns: repeat(5, auto) minmax(180px, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding-bottom: 10px;
+}
+
+.backgroundFilters input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.backgroundFilters button:focus-visible,
+.backgroundCard:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .backgroundFilters button {
@@ -3284,6 +3295,65 @@ body.isResizingPanels {
   .backgroundCard {
     flex-basis: 100%;
   }
+}
+
+.backgroundRecommendedGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: max-content;
+  padding: 4px;
+}
+
+.backgroundRecommendedGrid .backgroundEmptyState,
+.backgroundRecommendationIntro {
+  grid-column: 1 / -1;
+}
+
+.backgroundRecommendationIntro {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.backgroundRecommendationCard {
+  aspect-ratio: auto;
+  align-self: start;
+  background: #fff;
+  box-shadow: none;
+}
+
+.backgroundRecommendationCard .backgroundCardSpacer { display: none; }
+.backgroundRecommendationCard .backgroundThumb {
+  position: relative;
+  height: 210px;
+  border-radius: 0;
+}
+
+.backgroundRecommendationMeta {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.backgroundRecommendationMeta strong { overflow-wrap: anywhere; }
+.backgroundRecommendationMeta > span:not(.statusPill) { color: var(--muted); }
+.backgroundRecommendationMeta .statusPill { width: fit-content; }
+.backgroundRecommendationEmptyActions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 960px) {
+  .backgroundRecommendedGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .backgroundFilters button { min-height: 36px; }
+  .backgroundFilters input { flex-basis: 100%; }
+}
+
+@media (max-width: 460px) {
+  .backgroundRecommendedGrid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .referenceGrid {
