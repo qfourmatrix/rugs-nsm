@@ -25,6 +25,7 @@ import type {
 } from "../shared/types";
 import { isGenerationRoute } from "../shared/generation-routes";
 import { prepareGenerationIntent } from "./generation-intent";
+import { BackgroundRecommendationsResponseSchema, type BackgroundRecommendationsResponse } from "../shared/background-recommendations";
 
 export interface ShapeVariantsOverview {
   records: ShapeVariantRecord[];
@@ -230,6 +231,11 @@ export async function updateMasterShots(masterShots: MasterShots): Promise<Maste
 export async function getBackgroundLibrary(): Promise<BackgroundLibraryState> {
   const data = await request<unknown>("/api/background-library");
   return unwrap<BackgroundLibraryState>(data, ["library"]);
+}
+
+export async function getBackgroundRecommendations(productId: string, shotId?: string, signal?: AbortSignal): Promise<BackgroundRecommendationsResponse> {
+  const suffix = "/background-recommendations" + (shotId ? `?shotId=${encodeURIComponent(shotId)}` : "");
+  return BackgroundRecommendationsResponseSchema.parse(await request<unknown>(productPath(productId, suffix), { signal }));
 }
 
 export async function rescanBackgroundLibrary(): Promise<BackgroundLibraryState> {

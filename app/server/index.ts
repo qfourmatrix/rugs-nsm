@@ -58,6 +58,7 @@ import {
 } from "./background-library";
 import { acceptAsset, assetMetadataCacheStats, buildAssetBasename, generatedMetadataRevision, getAssetRecord, listGeneratedAssets, rejectAsset, saveAsset, writeOutputImage } from "./asset-store";
 import { config, clampQueueConcurrency } from "./config";
+import { getProductBackgroundRecommendations } from "./background-recommendations";
 import { asyncRoute, conflictError, errorMiddleware, notFoundError, validationError } from "./errors";
 import { ensureDir, imageMimeType, pathExists, safeChildPath, sha256File, SUPPORTED_IMAGE_EXTENSIONS } from "./fsUtils";
 import { loadMasterShots, saveMasterShots } from "./master-shots";
@@ -1475,6 +1476,20 @@ app.get(
   asyncRoute(async (_req, res) => {
     const library = await getCachedBackgroundLibrary({ productRoot: config.productRoot });
     res.json({ library: toClientBackgroundLibraryState(library) });
+  })
+);
+
+app.get(
+  "/api/products/:productId/background-recommendations",
+  asyncRoute(async (req, res) => {
+    const productId = req.params.productId as string;
+    const scan = await scanProducts({ productRoot: config.productRoot, productId });
+    const product = scan.products[0];
+    if (!product) throw notFoundError("PRODUCT_NOT_FOUND", "Product not found.");
+    const library = await getCachedBackgroundLibrary({ productRoot: config.productRoot });
+    const shotId = typeof req.query.shotId === "string" ? req.query.shotId : undefined;
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await getProductBackgroundRecommendations({ productRoot: config.productRoot, product, backgrounds: library.backgrounds, shotId }));
   })
 );
 
