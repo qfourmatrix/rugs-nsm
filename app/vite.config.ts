@@ -71,6 +71,9 @@ export default defineConfig(({ mode }) => {
       }
     },
     test: {
+      // The Mac updater runs the full suite beside filesystem/image workloads.
+      // Bound worker contention independently from Studio's 12-job queue.
+      maxWorkers: 2,
       environment: "node",
       include: ["tests/**/*.test.ts"]
     }

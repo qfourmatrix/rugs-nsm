@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:net";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { makeProduct } from "./test-utils";
@@ -19,10 +20,28 @@ it.each(["different products", "same shot"])("runs twelve jobs for %s, queues th
   const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const token = randomUUID();
   const origin = `http://127.0.0.1:${port}`;
-  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+  // Hold real loopback HTTP responses until the queue assertions finish. A
+  // fixed mock delay can expire during setup on the recipient's slower laptop.
+  const heldResponses: ServerResponse[] = [];
+  const provider = createHttpServer((request, response) => {
+    request.resume();
+    request.on("end", () => { heldResponses.push(response); });
+  }).listen(0, "127.0.0.1");
+  await once(provider, "listening");
+  const providerPort = (provider.address() as { port: number }).port;
+  const bootstrap = path.join(root, "fixture-server.mjs");
+  await writeFile(bootstrap, `
+    const { config } = await import(${JSON.stringify(pathToFileURL(path.join(appRoot, "server/config.ts")).href)});
+    // Override after dotenv loading: this fixture cannot reach a paid provider.
+    config.providerMode = "laozhang";
+    config.laozhangApiKey = "local-test-only";
+    config.laozhangEndpoint = "http://127.0.0.1:${providerPort}/generate";
+    await import(${JSON.stringify(pathToFileURL(path.join(appRoot, "server/index.ts")).href)});
+  `);
+  const child = spawn(process.execPath, ["--import", "tsx", bootstrap], {
     cwd: appRoot, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, RUGS_PRODUCT_ROOT_OVERRIDE: root, RUGS_PORT_OVERRIDE: String(port),
-      RUGS_PROVIDER_MODE_OVERRIDE: "mock", RUGS_PERF_TOKEN: token, MOCK_LATENCY_MIN_MS: "3000", MOCK_LATENCY_MAX_MS: "3000" }
+      RUGS_PROVIDER_MODE_OVERRIDE: "mock", RUGS_PERF_TOKEN: token }
   });
   let logs = "";
   child.stdout!.on("data", chunk => { logs = (logs + chunk).slice(-2000); });
@@ -33,7 +52,8 @@ it.each(["different products", "same shot"])("runs twelve jobs for %s, queues th
     return response.json();
   };
   const until = async (check: () => Promise<boolean>) => {
-    for (let attempt = 0; attempt < 150; attempt++) {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
       if (child.exitCode !== null) throw Error(`Fixture exited: ${logs}`);
       if (await check()) return;
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -44,7 +64,7 @@ it.each(["different products", "same shot"])("runs twelve jobs for %s, queues th
     await until(async () => {
       try {
         const { appInfo } = await read("/api/app-info");
-        expect(appInfo).toMatchObject({ providerMode: "mock", productRoot: root, queueConcurrency: 12 });
+        expect(appInfo).toMatchObject({ providerMode: "laozhang", productRoot: root, queueConcurrency: 12 });
         return true;
       } catch (error) {
         if (error instanceof TypeError) return false;
@@ -53,6 +73,9 @@ it.each(["different products", "same shot"])("runs twelve jobs for %s, queues th
     });
     const ids: string[] = [];
     for (let i = 0; i < 13; i++) {
+      // Admission may complete before source preparation. Establish the first
+      // twelve active calls before submitting the job expected to stay queued.
+      if (i === 12) await until(async () => heldResponses.length === 12);
       const route = origin + `/api/products/rug-${mode === "same shot" ? 0 : i}/generate`;
       const request = { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
         body: JSON.stringify({ shotId: "texture_macro", prompt: `Local mock concurrency check ${i}`, settings: { aspectRatio: "1:1", imageSize: "1K" }, batchSize: 1, referenceImages: [] }) };
@@ -66,7 +89,7 @@ it.each(["different products", "same shot"])("runs twelve jobs for %s, queues th
         expect(await replay.json()).toEqual(admitted);
       }
     }
-    await until(async () => (await read("/api/perf-test/metrics")).mockCalls === 12);
+    await until(async () => heldResponses.length === 12);
     const { jobs } = await read("/api/jobs");
     expect(jobs.filter((job: { status: string }) => job.status === "generating")).toHaveLength(12);
     expect(jobs.find((job: { jobId: string }) => job.jobId === ids[12]).status).toBe("queued");
@@ -76,13 +99,21 @@ it.each(["different products", "same shot"])("runs twelve jobs for %s, queues th
     }
     const cancel = await fetch(origin + `/api/jobs/${ids[0]}/cancel`, { method: "POST" });
     expect(cancel.ok).toBe(true);
-    await until(async () => (await read("/api/perf-test/metrics")).mockCalls === 13);
+    await until(async () => heldResponses.length === 13);
+    const result = JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: {
+      mimeType: "image/png", data: await readFile(path.join(root, "rug-0/base.jpg"), "base64")
+    } }] } }] });
+    for (const response of heldResponses) if (!response.destroyed) {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(result);
+    }
     await until(async () => {
       const { jobs: current } = await read("/api/jobs");
       expect(current.filter((job: { status: string }) => job.status === "generating").length).toBeLessThanOrEqual(12);
       return current.filter((job: { status: string }) => job.status === "succeeded").length === 12;
     });
-    expect((await read("/api/perf-test/metrics")).mockCalls).toBe(13);
+    expect(heldResponses).toHaveLength(13);
+    expect((await read("/api/jobs")).jobs.find((job: { jobId: string }) => job.jobId === ids[0]).status).toBe("cancelled");
     if (mode === "same shot") {
       const { generated } = await read("/api/products/rug-0/generated");
       expect(generated.active).toHaveLength(12);
@@ -96,5 +127,8 @@ it.each(["different products", "same shot"])("runs twelve jobs for %s, queues th
       child.kill("SIGTERM");
       await exited;
     }
+    provider.closeAllConnections();
+    await new Promise<void>((resolve, reject) => provider.close(error => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
   }
-}, 20_000);
+}, 60_000);
