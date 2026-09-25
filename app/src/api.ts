@@ -1,3 +1,4 @@
+import type { ExportPreparation, ExportPreview } from "../shared/export-preparation";
 import type {
   AspectRatio,
   AppInfo,
@@ -80,12 +81,14 @@ function isObject(value: unknown): value is JsonObject {
 
 async function request<T>(path: string, init: RequestInit = {}, unchanged?: T): Promise<T> {
   const generation = init.method === "POST" && isGenerationRoute(path);
+  const exportSubmission = init.method === "POST" &&
+    (path === "/api/gallery-exports/preflight" || path === "/api/gallery-exports" || path === "/api/gallery-exports/preview" || path === "/api/gallery-exports/cutouts");
   const intent = generation
     ? prepareGenerationIntent(window.localStorage, path, typeof init.body === "string" ? init.body : "null") : null;
   const timeout = new AbortController();
-  // Generation submissions must not expire while the server is accepting them.
+  // Generation and export submissions must not expire while the server is processing them.
   // Read/poll timeouts only refresh the UI; they never cancel background jobs.
-  const timer = generation ? undefined : window.setTimeout(() => timeout.abort(), 120000);
+  const timer = generation || exportSubmission ? undefined : window.setTimeout(() => timeout.abort(), 120000);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
   try {
   const response = await fetch(path, {
@@ -344,18 +347,18 @@ export async function acceptAllDoneAssets(productId: string, assetIds: string[])
   });
 }
 
-export async function preflightGalleryExport(productIds: string[]): Promise<GalleryPreflight> {
+export async function preflightGalleryExport(productIds: string[], preparation?: ExportPreparation): Promise<GalleryPreflight> {
   const data = await request<unknown>("/api/gallery-exports/preflight", {
     method: "POST",
-    body: JSON.stringify({ productIds })
+    body: JSON.stringify({ productIds, preparation })
   });
   return unwrap<GalleryPreflight>(data, ["preflight"]);
 }
 
-export async function startGalleryExport(productIds: string[], expectedFingerprints?: Record<string, string>): Promise<GalleryExportJob> {
+export async function startGalleryExport(productIds: string[], expectedFingerprints?: Record<string, string>, preparation?: ExportPreparation): Promise<GalleryExportJob> {
   const data = await request<unknown>("/api/gallery-exports", {
     method: "POST",
-    body: JSON.stringify({ productIds, expectedFingerprints })
+    body: JSON.stringify({ productIds, expectedFingerprints, preparation })
   });
   return unwrap<GalleryExportJob>(data, ["exportJob"]);
 }
@@ -569,4 +572,25 @@ export async function generateShapeVariantShots(productIds: string[], imageSize:
     method: "POST",
     body: JSON.stringify({ productIds, imageSize })
   });
+}
+
+export async function previewGalleryExport(productId: string, assetId: string | undefined, preparation: ExportPreparation, signal?: AbortSignal): Promise<ExportPreview> {
+  const data = await request<unknown>("/api/gallery-exports/preview", { method: "POST", body: JSON.stringify({ productId, assetId, preparation }), signal });
+  return unwrap<ExportPreview>(data, ["preview"]);
+}
+
+export interface MainCutout {
+  id: string; productId: string; sourceSha256: string; outputSha256?: string;
+  status: "processing" | "ready" | "failed"; approved: boolean; createdAt: string;
+  uncertainty: number | null; error: string | null;
+}
+export const getPhotoroomStatus = () => request<{ configured: boolean }>("/api/gallery-exports/photoroom");
+export async function getMainCutouts(productId: string): Promise<MainCutout[]> {
+  return unwrap(await request(productPath(productId, "/main-cutouts")), ["cutouts"]);
+}
+export async function removeMainBackground(productId: string, requestId: string): Promise<MainCutout> {
+  return unwrap(await request("/api/gallery-exports/cutouts", { method: "POST", body: JSON.stringify({ productId, requestId }) }), ["cutout"]);
+}
+export async function approveMainCutout(id: string): Promise<MainCutout> {
+  return unwrap(await request(`/api/gallery-exports/cutouts/${encodeURIComponent(id)}/approval`, { method: "PATCH", body: JSON.stringify({ approved: true }) }), ["cutout"]);
 }

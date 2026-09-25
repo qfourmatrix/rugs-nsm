@@ -1,3 +1,4 @@
+import { ExportPreparationSchema } from "./export-preparation";
 import { z } from "zod";
 import {
   FORBIDDEN_RUG_CHANGES,
@@ -402,8 +403,9 @@ export const GallerySelectionUpdateSchema = z.object({
 }).strict();
 
 export const GalleryExportSelectionSchema = z.object({
+  preparation: ExportPreparationSchema.optional(),
   expectedFingerprints: z.record(z.string().min(1).max(240), z.string().regex(/^[a-f0-9]{64}$/)).optional(),
-  productIds: z.array(z.string().trim().min(1).max(240)).min(1).max(100)
+  productIds: z.array(z.string().trim().min(1).max(240)).min(1)
 }).strict();
 
 export const GalleryReadinessUpdateSchema = z.object({

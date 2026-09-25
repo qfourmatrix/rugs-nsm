@@ -1,3 +1,4 @@
+import { ExportPreparation, initialExportPreparation } from "./ExportPreparation";
 import {
   AlertTriangle,
   ArrowDown,
@@ -111,6 +112,8 @@ export function GalleryExportWorkspace({
   const [selectionNotice, setSelectionNotice] = useState<{ familyId: string; message: string } | null>(null);
   const [gallerySummaries, setGallerySummaries] = useState<Record<string, GallerySelection>>({});
   const [activeFamilyId, setActiveFamilyId] = useState(initialProduct?.familyId ?? "");
+  const [preparing, setPreparing] = useState(false);
+  const [preparation, setPreparation] = useState(initialExportPreparation);
   const [preflight, setPreflight] = useState<GalleryPreflight | null>(null);
   const [exportJob, setExportJob] = useState<GalleryExportJob | null>(null);
   const initialExportIdRef = useRef(initialExportId);
@@ -187,7 +190,7 @@ export function GalleryExportWorkspace({
     [products, selectedIds]
   );
   const selectedFamilies = new Set(products.filter((product) => selectedIds.has(product.id)).map((product) => product.familyId));
-  const selectionFingerprint = `${selectedProductIds.join("\u0000")}|${galleryRevision}|${products.filter((product) => selectedIds.has(product.id)).map((product) => `${product.id}:${product.galleryRevision}:${product.exportReady}:${product.baseImage}`).join("|")}`;
+  const selectionFingerprint = `${JSON.stringify(preparation)}|${selectedProductIds.join("\u0000")}|${galleryRevision}|${products.filter((product) => selectedIds.has(product.id)).map((product) => `${product.id}:${product.galleryRevision}:${product.exportReady}:${product.baseImage}`).join("|")}`;
   const selectionFingerprintRef = useRef(selectionFingerprint);
   selectionFingerprintRef.current = selectionFingerprint;
   onCloseRef.current = onClose;
@@ -441,7 +444,7 @@ export function GalleryExportWorkspace({
     setPreflight(null);
     setPreflightFingerprint(null);
     try {
-      const result = await preflightGalleryExport(productIds);
+      const result = await preflightGalleryExport(productIds, preparation);
       if (preflightRequestIdRef.current === requestId && selectionFingerprintRef.current === fingerprint) {
         const changed = result.shapes.filter((shape) => shape.galleryRevision !== undefined && shape.galleryRevision !== (gallerySummaries[shape.productId]?.revision ?? products.find((product) => product.id === shape.productId)?.galleryRevision ?? 0));
         if (changed.length) {
@@ -471,7 +474,7 @@ export function GalleryExportWorkspace({
     setStartingExport(true);
     try {
       const expectedFingerprints = Object.fromEntries(checked.shapes.filter((shape) => shape.contentFingerprint).map((shape) => [shape.productId, shape.contentFingerprint!]));
-      const job = await startGalleryExport(productIds, expectedFingerprints);
+      const job = await startGalleryExport(productIds, expectedFingerprints, preparation);
       setExportJob(job);
       onExportStarted?.(job.exportId);
     } catch (exportError) {
@@ -515,6 +518,7 @@ export function GalleryExportWorkspace({
           </div>
         </header>
 
+        {preparing ? <ExportPreparation products={products.filter(product => selectedIds.has(product.id))} value={preparation} onChange={setPreparation} onBack={() => setPreparing(false)} onContinue={() => { setPreparing(false); void exportSelected(); }} /> : <>
         <div className="galleryExportBody">
           <aside className="galleryFamilyPanel">
             <div className="galleryPanelHeading">
@@ -617,13 +621,14 @@ export function GalleryExportWorkspace({
             void cancelGalleryExport(exportJob.exportId).then(setExportJob).catch(reason => setError(getErrorMessage(reason)));
           }}>Cancel export</button> : null}
           <div className="galleryExportBarMain">
-            <div className="galleryBatchSummary"><button type="button" aria-expanded={showBreakdown} onClick={() => setShowBreakdown((value) => !value)}>{selectedFamilies.size} rugs · {selectedProductIds.length} shape galleries · {selectedImageCount === null ? "Counting images…" : `${selectedImageCount} images`}</button><span>{selectedProductIds.length ? "Checks run automatically. Originals + Shopify WebPs in one ZIP." : "Choose rugs on the left. Green shapes are included by default."}</span></div>
+            <div className="galleryBatchSummary"><button type="button" aria-expanded={showBreakdown} onClick={() => setShowBreakdown((value) => !value)}>{selectedFamilies.size} rugs · {selectedProductIds.length} shape galleries · {selectedImageCount === null ? "Counting images…" : `${selectedImageCount} images`}</button><span>{selectedProductIds.length ? "Next: prepare images and preview WebP settings." : "Choose rugs on the left. Green shapes are included by default."}</span></div>
             {selectedProductIds.length > 0 ? <button className="galleryTextButton" type="button" disabled={workflowLocked} onClick={() => setSelectedIds(new Set())}>Clear</button> : null}
-            {exportJob?.status === "ready" ? <button className="galleryPrimaryButton" type="button" onClick={downloadExport}><Download size={15} /> {unexpectedSkips.length ? "Download valid shapes" : "Download ZIP"}</button> : <button className={preflightIsCurrent && preflight?.skippedCount && !exportJob ? "gallerySecondaryButton" : "galleryPrimaryButton"} type="button" onClick={() => void exportSelected()} disabled={workflowLocked || selectedProductIds.length === 0}>
+            {exportJob?.status === "ready" ? <button className="galleryPrimaryButton" type="button" onClick={downloadExport}><Download size={15} /> {unexpectedSkips.length ? "Download valid shapes" : "Download ZIP"}</button> : <button className={preflightIsCurrent && preflight?.skippedCount && !exportJob ? "gallerySecondaryButton" : "galleryPrimaryButton"} type="button" onClick={() => setPreparing(true)} disabled={workflowLocked || selectedProductIds.length === 0}>
               {workflowLocked ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}{jobRunning || startingExport ? "Preparing ZIP…" : checking ? "Checking images…" : savingProducts.size ? "Saving gallery…" : preflightIsCurrent && preflight?.skippedCount && !exportJob ? "Check again" : "Export selected"}
             </button>}
           </div>
         </footer>
+        </>}
       </section>
     </div>
   );
