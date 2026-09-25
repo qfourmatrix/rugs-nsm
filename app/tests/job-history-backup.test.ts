@@ -28,7 +28,9 @@ it("exports all durable history in stable order, preserves the source and refuse
     expect(await readFile(output, "utf8")).toBe("existing snapshot");
     expect((await readdir(root)).filter(name => name.endsWith(".tmp"))).toEqual([]);
   } finally { ledger.close(); await cleanupTempWorkspace(root); }
-});
+// Real SQLite and 1,200 filesystem writes compete with other installer tests.
+// This is a correctness check, not a five-second storage benchmark.
+}, 30_000);
 
 it("refuses a rollback snapshot while jobs are active", async () => {
   const root = await makeTempWorkspace();
