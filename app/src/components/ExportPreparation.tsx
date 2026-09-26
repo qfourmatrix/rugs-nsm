@@ -1,32 +1,47 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, Grid2X2, RotateCcw, RotateCw } from "lucide-react";
-import { DEFAULT_MAIN_IMAGE, DEFAULT_PREPARATION, WebpSettingsSchema, type ExportPreparation as Preparation, type ExportPreview, type MainImageSettings } from "../../shared/export-preparation";
+import { DEFAULT_MAIN_IMAGE, DEFAULT_PREPARATION, ExportPreparationSchema, WebpSettingsSchema, type ExportPreparation as Preparation, type ExportPreview, type MainImageSettings } from "../../shared/export-preparation";
 import type { ProductSummary } from "../../shared/types";
-import { getMainCutouts, getPhotoroomStatus, removeMainBackground, approveMainCutout, type MainCutout, getGallerySelection, getGenerated, imageUrl, previewGalleryExport, thumbnailUrl } from "../api";
+import { getCutoutBatch, startCutoutBatch, controlCutoutBatch, getMainCutouts, getPhotoroomStatus, removeMainBackground, approveMainCutout, type MainCutout, getGallerySelection, getGenerated, imageUrl, previewGalleryExport, thumbnailUrl } from "../api";
 import { getErrorMessage } from "../utils";
 import "../export-preparation.css";
 
+import type { CutoutBatch } from "../../shared/cutout-batch";
+const draftKey = "rugs-studio-export-draft-v1";
 const storageKey = "rugs-studio-export-webp-v1";
 export function initialExportPreparation(): Preparation {
+  try { const draft = localStorage.getItem(draftKey); if (draft) return ExportPreparationSchema.parse(JSON.parse(draft)); } catch { /* Recover legacy WebP settings below. */ }
   try { return { ...DEFAULT_PREPARATION, webp: WebpSettingsSchema.parse(JSON.parse(localStorage.getItem(storageKey) ?? "null")) }; }
   catch { return structuredClone(DEFAULT_PREPARATION); }
 }
 const bytes = (value: number) => value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(2)} MB` : `${(value / 1024).toFixed(1)} KB`;
 
-export function ExportPreparation({ products, value, onChange, onBack, onContinue }: {
+export function ExportPreparation({ products: inputProducts, value, onChange: updateValue, onBack, onContinue }: {
   products: ProductSummary[];
   value: Preparation;
   onChange: (next: Preparation) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const products = useMemo(() => [...inputProducts].sort((a, b) => a.familyId.localeCompare(b.familyId, undefined, { numeric: true }) || ["area", "runner", "round"].indexOf(a.shape) - ["area", "runner", "round"].indexOf(b.shape)), [inputProducts]);
+  const [familySearch, setFamilySearch] = useState("");
+  const families = useMemo(() => [...new Set(products.map(product => product.familyId))].filter(id => id.toLowerCase().includes(familySearch.toLowerCase())), [products, familySearch]);
+  const [batch, setBatch] = useState<CutoutBatch | null>(null);
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+  const batchRequest = useRef<string | null>(null);
+  const appliedCutouts = useRef(new Map<string, string>());
+  const [saveError, setSaveError] = useState(false);
   const [step, setStep] = useState<"main" | "webp">("main");
   const [photoroomReady, setPhotoroomReady] = useState(false);
   const [cutouts, setCutouts] = useState<MainCutout[]>([]);
   const [removing, setRemoving] = useState(false);
-  const [batchProgress, setBatchProgress] = useState<string | null>(null);
-  const stopBatch = useRef(false);
+
   const valueRef = useRef(value); valueRef.current = value;
+  const onChange = (next: Preparation) => {
+    valueRef.current = next;
+    try { localStorage.setItem(draftKey, JSON.stringify(next)); setSaveError(false); } catch { setSaveError(true); }
+    updateValue(next);
+  };
   const [productId, setProductId] = useState(products[0]?.id ?? "");
   const productIdRef = useRef(productId); productIdRef.current = productId;
   const [assetId, setAssetId] = useState("");
@@ -38,7 +53,11 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
   const [guides, setGuides] = useState(true);
   const [sharedCanvas, setSharedCanvas] = useState({ occupancy: 90, background: "#f1eee8" });
   const [collectionPage, setCollectionPage] = useState(0);
+  const pageFamilies = families.slice(collectionPage * 2, collectionPage * 2 + 2);
+  const visibleProducts = products.filter(product => pageFamilies.includes(product.familyId));
+  const pageCount = Math.max(1, Math.ceil(families.length / 2));
   const [collectionPreviews, setCollectionPreviews] = useState<Array<{ id: string; image: string; key: string; sourceSha256: string }>>([]);
+  const previewCache = useRef(new Map<string, { id: string; image: string; key: string; sourceSha256: string }>());
   const [zoom, setZoom] = useState(false);
   const [approvals, setApprovals] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(value.mainImages).filter(([, settings]) => settings.reviewedSourceSha256).map(([id, settings]) => [id, JSON.stringify(settings)])));
   const requestRef = useRef<AbortController | null>(null);
@@ -49,12 +68,12 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
   const product = products.find(item => item.id === productId) ?? products[0];
   const main = value.mainImages[productId] ?? DEFAULT_MAIN_IMAGE;
   const settingsKey = (settings?: MainImageSettings) => JSON.stringify(settings ? { ...settings, reviewedSourceSha256: undefined } : null);
-  const previewKey = JSON.stringify([productId, assetId, value.webp, settingsKey(value.mainImages[productId])]);
-  const collectionKey = JSON.stringify(products.map(product => [product.id, settingsKey(value.mainImages[product.id])]));
+  const previewKey = JSON.stringify([step, zoom, productId, assetId, step === "webp" ? value.webp : null, settingsKey(value.mainImages[productId])]);
+  const collectionKey = JSON.stringify(visibleProducts.map(product => [product.id, settingsKey(value.mainImages[product.id])]));
   const current = preview?.key === previewKey;
   const selectedCutout = cutouts.find(cutout => cutout.id === main.cutoutId);
   const pending = Object.entries(value.mainImages).filter(([id, settings]) => products.some(product => product.id === id) && approvals[id] !== JSON.stringify(settings)).length;
-  useEffect(() => { headingRef.current?.focus(); void getPhotoroomStatus().then(result => setPhotoroomReady(result.configured)).catch(error => setError(getErrorMessage(error))); return () => { requestRef.current?.abort(); stopBatch.current = true; }; }, []);
+  useEffect(() => { headingRef.current?.focus(); void getPhotoroomStatus().then(result => setPhotoroomReady(result.configured)).catch(error => setError(getErrorMessage(error))); return () => { requestRef.current?.abort(); }; }, []);
   useEffect(() => {
     let cancelled = false;
     setImages([]); setCutouts([]); setAssetId(""); setError(null);
@@ -65,6 +84,44 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
     return () => { cancelled = true; };
   }, [productId]);
   useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(value.webp)); } catch { /* Settings still apply to this export. */ } }, [value.webp]);
+  const batchActive = batchSubmitting || batch?.status === "running" || !!batch?.items.some(item => item.status === "processing");
+  const batchReady = batch?.items.filter(item => item.status === "ready").length ?? 0;
+  const batchFailed = batch?.items.filter(item => item.status === "failed" || item.status === "attention").length ?? 0;
+  const syncBatch = (next: CutoutBatch | null) => {
+    setBatch(next);
+    if (!next) return;
+    const latest = valueRef.current;
+    const mainImages = { ...latest.mainImages };
+    let changed = false;
+    for (const item of next.items) {
+      if (item.status !== "ready" || !item.cutoutId || !products.some(product => product.id === item.productId)) continue;
+      if (appliedCutouts.current.get(item.productId) === item.cutoutId) continue;
+      appliedCutouts.current.set(item.productId, item.cutoutId);
+      if (mainImages[item.productId]?.cutoutId === item.cutoutId) continue;
+      mainImages[item.productId] = { ...(mainImages[item.productId] ?? DEFAULT_MAIN_IMAGE), cutoutId: item.cutoutId, frame: true, portrait: true, reviewedSourceSha256: undefined };
+      changed = true;
+    }
+    if (changed) onChange({ ...latest, mainImages });
+  };
+  useEffect(() => {
+    let alive = true; let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { const next = await getCutoutBatch(); if (alive) syncBatch(next); }
+      catch (error) { if (alive) setError(getErrorMessage(error)); }
+      finally { if (alive) timer = setTimeout(() => void poll(), 1500); }
+    };
+    void poll(); return () => { alive = false; clearTimeout(timer); };
+  }, [products.map(product => product.id).join("|")]);
+  const batchControl = async (action: "pause" | "resume" | "retry") => {
+    setBatchSubmitting(true); setError(null);
+    try { syncBatch(await controlCutoutBatch(action)); } catch (error) { setError(getErrorMessage(error)); }
+    finally { setBatchSubmitting(false); }
+  };
+  const rotateCard = (id: string, direction: number) => {
+    const latest = valueRef.current; const main = latest.mainImages[id] ?? DEFAULT_MAIN_IMAGE;
+    const rotation = ((main.rotation + direction + 540) % 360) - 180;
+    onChange({ ...latest, mainImages: { ...latest.mainImages, [id]: { ...main, rotation, reviewedSourceSha256: undefined } } });
+  };
   const changeMain = (patch: Partial<MainImageSettings>) => onChange({ ...value, mainImages: { ...value.mainImages, [productId]: { ...main, ...patch, reviewedSourceSha256: undefined } } });
   const makePreview = async () => {
     requestRef.current?.abort();
@@ -72,15 +129,31 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
     setBusy(true); setError(null);
     try {
       if (collection) {
-        setCollectionPreviews([]);
-        for (const product of products.slice(collectionPage * 6, collectionPage * 6 + 6)) {
-          const key = settingsKey(value.mainImages[product.id]);
-          const result = await previewGalleryExport(product.id, undefined, { ...value, webp: { ...value.webp, maximumDimension: 600 } }, controller.signal);
-          if (!controller.signal.aborted) setCollectionPreviews(previous => [...previous, { id: product.id, image: result.image, key, sourceSha256: result.sourceSha256 }]);
-        }
+        const targets = visibleProducts;
+        const snapshot = valueRef.current;
+        const cached = targets.flatMap(product => {
+          const key = settingsKey(snapshot.mainImages[product.id]);
+          const found = previewCache.current.get(`${product.id}:${key}`);
+          return found ? [found] : [];
+        });
+        setCollectionPreviews(previous => [...cached, ...previous.filter(item => targets.some(product => product.id === item.id) && !cached.some(value => value.id === item.id))]);
+        const missing = targets.filter(product => !cached.some(item => item.id === product.id));
+        let index = 0;
+        const worker = async () => {
+          while (index < missing.length && !controller.signal.aborted) {
+            const product = missing[index++]; const key = settingsKey(snapshot.mainImages[product.id]);
+            const result = await previewGalleryExport(product.id, undefined, { ...snapshot, mainImages: snapshot.mainImages[product.id] ? { [product.id]: snapshot.mainImages[product.id] } : {} }, controller.signal, "layout");
+            if (controller.signal.aborted) return;
+            const item = { id: product.id, image: result.image, key, sourceSha256: result.sourceSha256 };
+            previewCache.current.set(`${product.id}:${key}`, item);
+            while (previewCache.current.size > 36) previewCache.current.delete(previewCache.current.keys().next().value!);
+            setCollectionPreviews(previous => [...previous.filter(value => value.id !== item.id), item]);
+          }
+        };
+        await Promise.all([worker(), worker()]);
         return;
       }
-      const result = await previewGalleryExport(productId, assetId || undefined, value, controller.signal);
+      const result = await previewGalleryExport(productId, assetId || undefined, value, controller.signal, step === "main" && !zoom ? "layout" : "webp");
       if (!controller.signal.aborted) setPreview({ key: previewKey, result });
     } catch (error) { if (!controller.signal.aborted) setError(getErrorMessage(error)); }
     finally { if (!controller.signal.aborted) setBusy(false); }
@@ -89,7 +162,7 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
   useEffect(() => {
     const timer = setTimeout(() => void makePreview(), 350);
     return () => { clearTimeout(timer); requestRef.current?.abort(); };
-  }, [previewKey, collectionKey, collection, collectionPage]);
+  }, [collection ? collectionKey : previewKey, collection, collectionPage]);
   const approveVisible = async () => {
     setBusy(true); setError(null);
     try {
@@ -124,21 +197,14 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
     finally { setRemoving(false); }
   };
   const removeBatch = async () => {
-    if (removing) return;
-    setRemoving(true); setError(null); stopBatch.current = false;
+    if (batchActive) return;
+    setBatchSubmitting(true); setError(null);
+    batchRequest.current ??= crypto.randomUUID();
     try {
-      for (const [index, product] of products.entries()) {
-        if (stopBatch.current) break;
-        setBatchProgress(`${index + 1} of ${products.length}: ${product.name} · ${product.shape}`);
-        const saved = await getMainCutouts(product.id);
-        if (!saved.some(cutout => cutout.status === "ready") && saved.some(cutout => cutout.status === "processing" || cutout.status === "failed")) throw new Error(`${product.name}: a previous attempt needs attention. Review it and choose an explicit retry; the batch did not resubmit it.`);
-        const cutout = saved.find(cutout => cutout.status === "ready" && cutout.approved) ?? saved.find(cutout => cutout.status === "ready") ?? await removeMainBackground(product.id, crypto.randomUUID());
-        if (stopBatch.current) break;
-        useCutout(product.id, cutout);
-        if (product.id === productIdRef.current) setCutouts([cutout, ...saved.filter(item => item.id !== cutout.id)]);
-      }
+      syncBatch(await startCutoutBatch(products.map(product => product.id), batchRequest.current));
+      batchRequest.current = null;
     } catch (error) { setError(getErrorMessage(error)); }
-    finally { setRemoving(false); setBatchProgress(null); }
+    finally { setBatchSubmitting(false); }
   };
   const approveMain = async () => {
     setBusy(true); setError(null);
@@ -179,10 +245,10 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
           <h5>Background removal · Photoroom</h5>
           {!photoroomReady && <p>To connect, add PHOTOROOM_API_KEY to app/.env.local and restart Studio. Keep the key private.</p>}
           {!main.cutoutId && cutouts.some(cutout => cutout.status === "ready") && <button type="button" onClick={() => useCutout(productId, cutouts.find(cutout => cutout.status === "ready" && cutout.approved) ?? cutouts.find(cutout => cutout.status === "ready")!)}>Use saved cutout · free</button>}
-          <button type="button" disabled={!photoroomReady || removing} onClick={() => void removeOne()}>{removing ? "Removing background…" : main.cutoutId ? "Retry from original · $0.02" : "Remove background · $0.02"}</button>
-          <button type="button" disabled={!photoroomReady || removing} onClick={() => void removeBatch()}>Remove all selected · up to ${(products.length * 0.02).toFixed(2)}</button>
+          <button type="button" disabled={!photoroomReady || removing || batchActive} onClick={() => void removeOne()}>{removing ? "Removing background…" : main.cutoutId || cutouts.some(item => item.status === "failed") ? "Retry from original · $0.02" : "Remove background · $0.02"}</button>
+          <button type="button" disabled={!photoroomReady || removing || batchActive} onClick={() => void removeBatch()}>Remove all selected · up to ${(products.length * 0.02).toFixed(2)}</button>
           <p>API usage estimate before taxes and plan minimums. Saved cutouts are reused. Every new retry may be charged.</p>
-          {batchProgress && <p role="status">{batchProgress} <button type="button" onClick={() => { stopBatch.current = true; }}>Stop after current image</button></p>}
+
           <details className="exportPrepAdvanced"><summary>Saved attempts & provider confidence</summary>{cutouts.some(cutout => cutout.status === "ready") && <label>Saved cutout<select aria-label="Saved cutout" value={main.cutoutId ?? ""} onChange={event => { if (event.target.value) useCutout(productId, cutouts.find(cutout => cutout.id === event.target.value)!); else changeMain({ cutoutId: undefined }); }}><option value="">Use original background</option>{cutouts.filter(cutout => cutout.status === "ready").map(cutout => <option key={cutout.id} value={cutout.id}>{new Date(cutout.createdAt).toLocaleString()} · {cutout.approved ? "Approved" : "Needs review"}</option>)}</select></label>}
           {selectedCutout && <p>{selectedCutout.uncertainty === null ? "Provider confidence unavailable." : `Provider uncertainty: ${Math.round(selectedCutout.uncertainty * 100)}%.` } Inspect fringe and pale edges against the original before approving. Confidence is not a quality guarantee.</p>}</details>
 
@@ -197,12 +263,34 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
         </section>}
       </aside>
       <main className="exportPrepPreview" ref={previewPaneRef}>
-        <div className="exportPrepToolbar"><div><h4>{collection ? "Review your collection" : product?.name} {!collection && <> · {assetId ? images.find(image => image.id === assetId)?.name : "Main image"}</>}</h4><p>{collection ? "Open a rug to compare, rotate, or adjust its spacing." : current ? `${preview.result.width} × ${preview.result.height} px · WebP ${bytes(preview.result.outputBytes)} · source ${bytes(preview.result.sourceBytes)}` : "Create a preview to measure the current settings."}</p></div><label className="exportPrepCheck"><input type="checkbox" checked={zoom} onChange={event => setZoom(event.target.checked)} /> View at 100%</label></div>
+        <div className="exportPrepToolbar"><div><h4>{collection ? "Review your collection" : product?.name} {!collection && <> · {assetId ? images.find(image => image.id === assetId)?.name : "Main image"}</>}</h4><p>{collection ? "Rotate on each preview. Open an image for a closer look." : current ? `${preview.result.width} × ${preview.result.height} px · ${step === "webp" || zoom ? "WebP" : "Preview"} ${bytes(preview.result.outputBytes)} · source ${bytes(preview.result.sourceBytes)}` : "Create a preview to measure the current settings."}</p></div>{!collection && <label className="exportPrepCheck"><input type="checkbox" checked={zoom} onChange={event => setZoom(event.target.checked)} /> View at 100%</label>}</div>
         <div className="exportPrepViewToggle">{step === "main" && <button type="button" aria-pressed={guides} onClick={() => setGuides(!guides)}><Grid2X2 size={15}/>Framing grid</button>}<button type="button" aria-pressed={!collection} onClick={() => setCollection(false)}>Image detail</button><button type="button" aria-pressed={collection} onClick={() => setCollection(true)}>Collection layout</button></div>
-        {step === "main" && collection && <div className="exportPrepBatch"><div><strong>Clean backgrounds</strong><p>{photoroomReady ? `Photoroom · up to $${(products.length * 0.02).toFixed(2)} for ${products.length} images. Saved cutouts are reused.` : "Use saved cutouts, or connect Photoroom in app/.env.local to remove new backgrounds."}</p></div><button type="button" disabled={removing} onClick={() => void removeBatch()}>{removing ? "Preparing images…" : photoroomReady ? "Remove backgrounds" : "Use saved cutouts"}</button>{batchProgress && <p role="status">{batchProgress} <button type="button" onClick={() => { stopBatch.current = true; }}>Stop after current image</button></p>}</div>}
+        {step === "main" && <div className="exportPrepBatch">
+          <div><strong>{batchActive ? "Removing backgrounds" : "Background removal"}</strong><p>{batch ? `${batchReady} of ${batch.items.length} ready${batchFailed ? ` · ${batchFailed} need attention` : ""}` : `${products.length} main images · up to $${(products.length * 0.02).toFixed(2)}. Saved cutouts are reused.`}</p><p>{!photoroomReady ? "Photoroom is not connected. Reuse saved cutouts for free." : "Runs while you review. Keep the Studio server open; you can close this tab."}</p></div>
+          {batch?.status === "running" ? <button type="button" disabled={batchSubmitting} onClick={() => void batchControl("pause")}>Pause batch</button> : batch?.status === "paused" ? <button type="button" disabled={batchActive} onClick={() => void batchControl("resume")}>Resume batch</button> : <button type="button" className="galleryPrimaryButton" disabled={batchActive || removing} onClick={() => void removeBatch()}>{batchSubmitting ? "Queuing…" : photoroomReady ? "Remove all backgrounds" : "Use saved cutouts"}</button>}
+          {batchFailed > 0 && <button type="button" disabled={batchActive || removing} onClick={() => void batchControl("retry")}>Retry {batchFailed} failed · up to ${(batchFailed * 0.02).toFixed(2)}</button>}
+          {batch && <progress aria-label="Background removal progress" value={batch.items.filter(item => ["ready", "failed", "attention"].includes(item.status)).length} max={batch.items.length} />}
+          {batch?.error && <p role="alert" className="exportPrepError">{batch.error}</p>}
+        </div>}
         {step === "main" && guides && <p className="exportPrepGuideNote">5% grid · Center lines · Blue outline = fit area. Guides never export.</p>}
-        {collection ? <><p>Showing six images at a time. Approval applies only to this page.</p><div className="exportPrepCollection">{products.slice(collectionPage * 6, collectionPage * 6 + 6).map(product => { const settings = value.mainImages[product.id]; const item = collectionPreviews.find(item => item.id === product.id && item.key === settingsKey(settings)); const approved = settings && approvals[product.id] === JSON.stringify(settings); return <figure key={product.id}><button type="button" className="exportPrepCard" aria-label={`Adjust ${product.name} ${product.shape}`} onClick={() => { setProductId(product.id); setAssetId(""); setCollection(false); }}><FramedPreview src={item?.image ?? (product.baseImage ? thumbnailUrl(product.id, "base", product.baseImage) : "")} alt={`${product.name} ${product.shape} export layout`} occupancy={settings?.occupancy ?? 90} guides={!!item && !!settings?.frame && guides && step === "main"}/></button><figcaption><strong>{product.name}</strong> · {product.shape}<span>{approved ? "Approved" : settings ? "Needs review" : "Original"}</span></figcaption></figure>; })}</div><div className="exportPrepActions"><button type="button" disabled={collectionPage === 0 || busy} onClick={() => { setCollectionPage(page => page - 1); setCollectionPreviews([]); }}>Previous page</button><span>Page {collectionPage + 1} of {Math.ceil(products.length / 6)}</span><button type="button" disabled={(collectionPage + 1) * 6 >= products.length || busy} onClick={() => { setCollectionPage(page => page + 1); setCollectionPreviews([]); }}>Next page</button></div></> : preview ? <div className={`exportPrepCompare ${zoom ? "isActualSize" : ""} ${current ? "" : "isStale"}`}><figure><figcaption>{step === "main" ? "Untouched original" : "Prepared image · before compression"}</figcaption><div><img src={step === "main" && product?.baseImage ? imageUrl(product.id, "base", product.baseImage) : preview.result.reference} alt={step === "main" ? "Untouched original" : "Prepared image before WebP compression"} /></div></figure><figure><figcaption>{step === "main" ? "Prepared image" : `WebP · ${bytes(preview.result.outputBytes)}`}</figcaption>{step === "main" && main.frame ? <FramedPreview src={preview.result.image} alt="Prepared main image" occupancy={main.occupancy} guides={guides && current} naturalSize={zoom ? preview.result.width : undefined}/> : <div><img src={preview.result.image} alt="Actual WebP output at the selected settings" /></div>}</figure></div> : <div className="exportPrepEmpty"><img src={product?.baseImage ? thumbnailUrl(product.id, "base", product.baseImage) : undefined} alt="Original main image" /><p>Preview the actual export before downloading.</p></div>}
+        {collection ? <>
+          <div className="exportPrepFamilyNav"><label>Find a family<input type="search" value={familySearch} placeholder="Search rug families" onChange={event => { setFamilySearch(event.target.value); setCollectionPage(0); }} /></label><span>Area · Runner · Round, together</span></div>
+          {pageFamilies.map(family => <section className="exportPrepFamily" key={family} aria-label={`${family} family`}><h4>{family}</h4><div className="exportPrepCollection">{products.filter(product => product.familyId === family).map(product => {
+            const settings = value.mainImages[product.id];
+            const item = collectionPreviews.find(item => item.id === product.id && item.key === settingsKey(settings));
+            const previous = collectionPreviews.find(item => item.id === product.id);
+            const previousSettings = previous ? JSON.parse(previous.key) as MainImageSettings | null : null;
+            const rotationOnly = previous && settingsKey({ ...DEFAULT_MAIN_IMAGE, ...previousSettings, rotation: settings?.rotation ?? 0 }) === settingsKey(settings);
+            const shown = item ?? (rotationOnly ? previous : undefined);
+            const rotationDelta = !item && rotationOnly ? (settings?.rotation ?? 0) - (previousSettings?.rotation ?? 0) : 0;
+            const approved = settings && approvals[product.id] === JSON.stringify(settings);
+            const job = batch?.items.find(item => item.productId === product.id);
+            return <figure key={product.id}><div className="exportPrepCardWrap"><button type="button" className="exportPrepCard" aria-label={`Adjust ${product.familyId} ${product.shape}`} onClick={() => { setProductId(product.id); setAssetId(""); setCollection(false); }}><FramedPreview rotation={rotationDelta} src={shown?.image ?? (product.baseImage ? thumbnailUrl(product.id, "base", product.baseImage) : "")} alt={`${product.familyId} ${product.shape} export layout`} occupancy={settings?.occupancy ?? 90} guides={!!shown && !!settings?.frame && guides && step === "main"}/></button><div className="exportPrepCardRotate"><button type="button" aria-label={`Rotate ${product.familyId} ${product.shape} left`} title="Rotate left 90°" onClick={() => rotateCard(product.id, -90)}><RotateCcw size={17}/></button><button type="button" aria-label={`Rotate ${product.familyId} ${product.shape} right`} title="Rotate right 90°" onClick={() => rotateCard(product.id, 90)}><RotateCw size={17}/></button></div></div><figcaption><strong>{product.shape}</strong><span>{job?.status === "processing" ? "Removing background…" : job?.status === "queued" ? "Queued" : job?.status === "failed" || job?.status === "attention" ? "Needs retry" : !item ? "Updating preview…" : approved ? "Approved" : settings ? "Needs review" : "Original"}</span>{job?.error && <span className="exportPrepError">{job.error}</span>}</figcaption></figure>;
+          })}</div></section>)}
+          {families.length === 0 && <p>No families match your search.</p>}
+          <div className="exportPrepActions"><button type="button" disabled={collectionPage === 0} onClick={() => setCollectionPage(page => page - 1)}>Previous families</button><span>Page {collectionPage + 1} of {pageCount}</span><button type="button" disabled={collectionPage + 1 >= pageCount} onClick={() => setCollectionPage(page => page + 1)}>Next families</button></div></> : preview ? <div className={`exportPrepCompare ${zoom ? "isActualSize" : ""} ${current ? "" : "isStale"}`}><figure><figcaption>{step === "main" ? "Untouched original" : "Prepared image · before compression"}</figcaption><div><img src={step === "main" && product?.baseImage ? imageUrl(product.id, "base", product.baseImage) : preview.result.reference} alt={step === "main" ? "Untouched original" : "Prepared image before WebP compression"} /></div></figure><figure><figcaption>{step === "main" ? "Prepared image" : `WebP · ${bytes(preview.result.outputBytes)}`}</figcaption>{step === "main" && main.frame ? <FramedPreview src={preview.result.image} alt="Prepared main image" occupancy={main.occupancy} guides={guides && current} naturalSize={zoom ? preview.result.width : undefined}/> : <div><img src={preview.result.image} alt="Actual WebP output at the selected settings" /></div>}</figure></div> : <div className="exportPrepEmpty"><img src={product?.baseImage ? thumbnailUrl(product.id, "base", product.baseImage) : undefined} alt="Original main image" /><p>Preview the actual export before downloading.</p></div>}
         {!collection && preview && !current && <p className="exportPrepStale" role="status">Settings changed. Update the preview before judging quality or approving.</p>}
+        {saveError && <p role="alert" className="exportPrepError">Could not save your draft in this browser. Keep this tab open.</p>}
         {error && <p role="alert" className="exportPrepError">{error}</p>}
         <div className="exportPrepActions"><button type="button" className="galleryPrimaryButton" disabled={busy} onClick={() => void makePreview()}>{busy ? "Creating preview…" : "Update preview"}</button>{collection && <button type="button" disabled={busy || removing || !collectionPreviews.some(item => value.mainImages[item.id] && item.key === settingsKey(value.mainImages[item.id]) && approvals[item.id] !== JSON.stringify(value.mainImages[item.id]))} onClick={() => void approveVisible()}>Approve this page</button>}{!collection && !assetId && value.mainImages[productId] && <button type="button" disabled={!current || busy || removing} onClick={() => void approveMain()}>{approvals[productId] === JSON.stringify(main) ? <><Check size={16} /> Main image approved</> : "Approve this main image"}</button>}</div>
         {!collection && <details className="exportPrepOriginal"><summary>Compare with untouched original</summary>{product?.baseImage && <img loading="lazy" src={imageUrl(product.id, "base", product.baseImage)} alt="Untouched source main image" />}</details>}
@@ -210,15 +298,15 @@ export function ExportPreparation({ products, value, onChange, onBack, onContinu
         <p className="exportPrepBackgroundNote">Approve only when the whole rug and fringe are intact. A failed cutout stays out of export. Retry from the original, or keep a better saved attempt. Adjusting WebP settings does not call Photoroom.</p>
       </main>
     </div>
-    <footer className="exportPrepFooter"><div><strong>{products.length} shape galleries</strong><p>{pending ? `${pending} edited main ${pending === 1 ? "image needs" : "images need"} preview and approval.` : "Settings apply to WebPs. The ZIP also includes untouched originals."}</p></div><button type="button" className="galleryPrimaryButton" disabled={pending > 0 || busy || removing} onClick={() => { if (step === "main") { setStep("webp"); setCollection(false); } else onContinue(); }}>{step === "main" ? "Continue to WebP" : "Download ZIP"}</button></footer>
+    <footer className="exportPrepFooter"><div><strong>{products.length} shape galleries · {saveError ? "Draft not saved" : "Draft saved on this browser"}</strong><p>{pending ? `${pending} edited main ${pending === 1 ? "image needs" : "images need"} preview and approval.` : "Settings apply to WebPs. The ZIP also includes untouched originals."}</p></div><button type="button" className="galleryPrimaryButton" disabled={pending > 0 || busy || removing || batchActive} onClick={() => { if (step === "main") { setStep("webp"); setCollection(false); } else onContinue(); }}>{step === "main" ? "Continue to WebP" : "Download ZIP"}</button></footer>
   </div>;
 }
 
 function CanvasFields({occupancy,background,onChange}:{occupancy:number;background:string;onChange:(patch:Partial<MainImageSettings>)=>void}) {
   return <><label>Minimum edge margin <output>{(100-occupancy)/2}%</output><input aria-label="Minimum edge margin" type="range" min="0" max="30" step="0.5" value={(100-occupancy)/2} onChange={event=>onChange({occupancy:100-Number(event.target.value)*2})}/></label><div className="exportPrepPresets">{[["Default",5],["Roomy",10],["Airy",15]].map(([label,margin])=><button type="button" key={label} aria-pressed={occupancy===100-Number(margin)*2} onClick={()=>onChange({occupancy:100-Number(margin)*2})}>{label} {margin}%</button>)}</div><p>Fits inside {occupancy}% of the canvas. Narrow shapes keep more space on their sides.</p><label>Canvas color<input aria-label="Canvas color" type="color" value={background} onChange={event=>onChange({background:event.target.value})}/></label></>;
 }
-function FramedPreview({src,alt,occupancy,guides,naturalSize}:{src:string;alt:string;occupancy:number;guides:boolean;naturalSize?:number}) {
+function FramedPreview({src,alt,occupancy,guides,naturalSize,rotation=0}:{src:string;alt:string;occupancy:number;guides:boolean;naturalSize?:number;rotation?:number}) {
   const [loaded,setLoaded]=useState("");
   const margin=(100-occupancy)/2;
-  return <div className="exportFrameViewport"><div className={`exportFrameCanvas ${naturalSize?'isZoomed':''}`} style={naturalSize?{width:naturalSize,height:naturalSize}:undefined}><img src={src} alt={alt} onLoad={()=>setLoaded(src)}/>{guides&&loaded===src&&<div className="exportFrameGuides" aria-hidden="true"><div className="exportFrameGrid"/><div className="exportFrameCenter vertical"/><div className="exportFrameCenter horizontal"/><div className="exportFrameFit" style={{inset:`${margin}%`}}/><span className="exportFrameLabel" style={{top:`${margin/2}%`}}>{margin}% min</span></div>}</div></div>;
+  return <div className="exportFrameViewport"><div className={`exportFrameCanvas ${naturalSize?'isZoomed':''}`} style={naturalSize?{width:naturalSize,height:naturalSize}:undefined}><img src={src} alt={alt} style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined} onLoad={()=>setLoaded(src)}/>{guides&&loaded===src&&<div className="exportFrameGuides" aria-hidden="true"><div className="exportFrameGrid"/><div className="exportFrameCenter vertical"/><div className="exportFrameCenter horizontal"/><div className="exportFrameFit" style={{inset:`${margin}%`}}/><span className="exportFrameLabel" style={{top:`${margin/2}%`}}>{margin}% min</span></div>}</div></div>;
 }

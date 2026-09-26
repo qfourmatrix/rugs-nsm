@@ -1,3 +1,5 @@
+import { CutoutBatchQueue } from "./cutout-batch";
+import { CutoutBatchRequestSchema } from "../shared/cutout-batch";
 import { approveCutout, createCutout, listCutouts, CutoutApprovalSchema, CutoutRequestSchema } from "./main-image-cutouts";
 import { ExportPreviewSchema } from "../shared/export-preparation";
 import { previewGalleryExportImage } from "./gallery-export";
@@ -119,6 +121,7 @@ const app = express();
 const jobLedger = await JobLedger.open(config.productRoot);
 const jobs = new JobRegistry(undefined, record => jobLedger.put(record));
 const jobServerEpoch = Date.now().toString(36);
+const cutoutBatches = new CutoutBatchQueue(config.productRoot, () => process.env.PHOTOROOM_API_KEY?.trim());
 const galleryExports = new GalleryExportRegistry(config.productRoot);
 const pending: Array<QueuedGeneration> = [];
 const activeGenerations = new Map<string, QueuedGeneration>();
@@ -1602,6 +1605,18 @@ app.post(
   })
 );
 
+app.get("/api/gallery-exports/cutout-batch", asyncRoute(async (_req, res) => {
+  res.json({ batch: await cutoutBatches.get() });
+}));
+app.post("/api/gallery-exports/cutout-batch", asyncRoute(async (req, res) => {
+  const parsed = CutoutBatchRequestSchema.parse(req.body ?? {});
+  res.status(202).json({ batch: await cutoutBatches.start(parsed.requestId, parsed.productIds) });
+}));
+app.patch("/api/gallery-exports/cutout-batch", asyncRoute(async (req, res) => {
+  const parsed = z.object({ action: z.enum(["pause", "resume", "retry"]) }).strict().parse(req.body ?? {});
+  res.json({ batch: await cutoutBatches.control(parsed.action) });
+}));
+
 app.get("/api/gallery-exports/photoroom", (_req, res) => res.json({ configured: Boolean(process.env.PHOTOROOM_API_KEY?.trim()) }));
 app.get("/api/products/:productId/main-cutouts", asyncRoute(async (req, res) => {
   res.json({ cutouts: await listCutouts(config.productRoot, req.params.productId as string) });
@@ -1617,7 +1632,7 @@ app.patch("/api/gallery-exports/cutouts/:id/approval", asyncRoute(async (req, re
 
 app.post("/api/gallery-exports/preview", asyncRoute(async (req, res) => {
   const parsed = ExportPreviewSchema.parse(req.body ?? {});
-  res.json({ preview: await previewGalleryExportImage(config.productRoot, parsed.productId, parsed.assetId, parsed.preparation) });
+  res.json({ preview: await previewGalleryExportImage(config.productRoot, parsed.productId, parsed.assetId, parsed.preparation, parsed.purpose) });
 }));
 
 app.post(
@@ -2238,6 +2253,7 @@ jobs.restore(jobLedger.history({ limit: 500 }).jobs);
 await reconcileInterruptedShapeVariants();
 
 app.listen(config.port, "127.0.0.1", () => {
+  void cutoutBatches.get().catch(error => console.error("Could not recover background-removal batch:", error instanceof Error ? error.message : "Unknown error"));
   console.log(`Product Shot Queue API listening on http://127.0.0.1:${config.port}`);
   console.log(`Product root: ${config.productRoot}`);
   console.log(`Provider mode: ${config.providerMode}`);

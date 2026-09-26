@@ -574,8 +574,8 @@ export async function generateShapeVariantShots(productIds: string[], imageSize:
   });
 }
 
-export async function previewGalleryExport(productId: string, assetId: string | undefined, preparation: ExportPreparation, signal?: AbortSignal): Promise<ExportPreview> {
-  const data = await request<unknown>("/api/gallery-exports/preview", { method: "POST", body: JSON.stringify({ productId, assetId, preparation }), signal });
+export async function previewGalleryExport(productId: string, assetId: string | undefined, preparation: ExportPreparation, signal?: AbortSignal, purpose: "layout" | "webp" = "webp"): Promise<ExportPreview> {
+  const data = await request<unknown>("/api/gallery-exports/preview", { method: "POST", body: JSON.stringify({ productId, assetId, preparation, purpose }), signal });
   return unwrap<ExportPreview>(data, ["preview"]);
 }
 
@@ -593,4 +593,14 @@ export async function removeMainBackground(productId: string, requestId: string)
 }
 export async function approveMainCutout(id: string): Promise<MainCutout> {
   return unwrap(await request(`/api/gallery-exports/cutouts/${encodeURIComponent(id)}/approval`, { method: "PATCH", body: JSON.stringify({ approved: true }) }), ["cutout"]);
+}
+
+export async function getCutoutBatch(): Promise<import("../shared/cutout-batch").CutoutBatch | null> {
+  return unwrap(await request("/api/gallery-exports/cutout-batch"), ["batch"]);
+}
+export async function startCutoutBatch(productIds: string[], requestId: string): Promise<import("../shared/cutout-batch").CutoutBatch> {
+  return unwrap(await request("/api/gallery-exports/cutout-batch", { method: "POST", body: JSON.stringify({ productIds, requestId }) }), ["batch"]);
+}
+export async function controlCutoutBatch(action: "pause" | "resume" | "retry"): Promise<import("../shared/cutout-batch").CutoutBatch> {
+  return unwrap(await request("/api/gallery-exports/cutout-batch", { method: "PATCH", body: JSON.stringify({ action }) }), ["batch"]);
 }
