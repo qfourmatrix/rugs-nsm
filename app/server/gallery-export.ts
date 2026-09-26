@@ -350,7 +350,11 @@ async function inspectShape({
       issues.push(issue(product, "warning", "UNDERSIZED_IMAGE", `${item.shotName} is ${item.sourceDimensions.width}px and will not be upscaled.`, item.asset?.assetId));
     }
     try {
-      await validateShopifyConversion(productRoot, item.sourcePath, item.sourceSha256, preparation, item.role === "main" ? preparation.mainImages[product.id] : undefined, product.id);
+      // Preflight checks source identity, dimensions and approval only. Encoding here
+      // stalls large selections and evicts the bounded cache before build can reuse it.
+      if (mainSettings?.cutoutId) {
+        await resolveCutout(productRoot, product.id, mainSettings.cutoutId, item.sourceSha256, true);
+      }
     } catch (error) {
       issues.push(issue(product, "blocker", "SHOPIFY_CONVERSION_FAILED", `${item.shotName}: ${error instanceof Error ? error.message : "Shopify conversion failed."}`, item.asset?.assetId));
     }

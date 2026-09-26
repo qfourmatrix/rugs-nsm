@@ -33,19 +33,39 @@ describe("curated Shopify gallery exports", () => {
     await makeSquareProduct("reuse-rug", 256);
     const before = galleryConversionMetrics();
     const preflight = await preflightGalleryExport({ productRoot, productIds: ["reuse-rug"] });
+    expect(galleryConversionMetrics().encodes).toBe(before.encodes);
     const fingerprint = preflight.shapes[0].contentFingerprint;
     if (!fingerprint) throw new Error("Expected a valid preflight fingerprint");
     await buildGalleryExport({ productRoot, productIds: ["reuse-rug"], expectedFingerprints: { "reuse-rug": fingerprint }, exportId: "export_reused" });
     expect(galleryConversionMetrics().encodes - before.encodes).toBe(1);
-    expect(galleryConversionMetrics().hits - before.hits).toBe(2);
+    expect(galleryConversionMetrics().hits - before.hits).toBe(0);
     const jobsDir = path.join(productRoot, ".product-shot-queue", "export-jobs");
     const cacheDir = (await fs.readdir(jobsDir)).find(name => name.startsWith("export_cache_"))!;
     const cacheFile = (await fs.readdir(path.join(jobsDir, cacheDir))).find(name => name.endsWith(".webp"))!;
     await fs.writeFile(path.join(jobsDir, cacheDir, cacheFile), "corrupted cache");
     const checked = await preflightGalleryExport({ productRoot, productIds: ["reuse-rug"] });
     expect(checked.readyCount).toBe(1);
+    expect(galleryConversionMetrics().encodes - before.encodes).toBe(1);
+    await buildGalleryExport({ productRoot, productIds: ["reuse-rug"], exportId: "export_repaired" });
     expect(galleryConversionMetrics().encodes - before.encodes).toBe(2);
   });
+
+  it("checks a selection larger than the cache without encoding and encodes each image only during build", async () => {
+    const productIds = Array.from({ length: 70 }, (_, i) => `large-${i}`);
+    for (const [i, id] of productIds.entries()) {
+      const { productDir } = await makeSquareProduct(id, 32);
+      await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: i * 3, g: 80, b: 120 } } }).png().toFile(path.join(productDir, "base.png"));
+    }
+    const before = galleryConversionMetrics().encodes;
+    const preflight = await preflightGalleryExport({ productRoot, productIds });
+    expect(preflight.readyCount).toBe(70);
+    expect(galleryConversionMetrics().encodes).toBe(before);
+    const progress: string[] = [];
+    const result = await buildGalleryExport({ productRoot, productIds, exportId: "export_large", onProgress: value => progress.push(value.message) });
+    expect(result.receipt.includedShapes).toBe(70);
+    expect(galleryConversionMetrics().encodes - before).toBe(70);
+    expect(progress.filter(message => message.startsWith("Optimized "))).toHaveLength(70);
+  }, 30000);
 
   it("queues exports with finite admission and freezes the selection at submission", async () => {
     await makeSquareProduct("queued-rug", 64);
