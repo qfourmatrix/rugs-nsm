@@ -28,3 +28,11 @@ Verification: 352 tests across 62 files and production build passed. A 65-produc
 Browser smoke used a disposable saved-cutout catalog with PHOTOROOM_API_KEY removed: production preview on localhost:5421, 1280×900 and 390×844, export preparation, rotate and grid controls, no framework overlay, no horizontal overflow, and no console errors. Browser plugin was unavailable; existing Playwright/Chrome performed the check. Temporary QA servers were stopped. No paid provider calls and no live catalog or recipient-process changes.
 
 Limits: this does not verify the current provider account balance or live provider availability. The rate gate is per Studio process; restarting it resets its rolling history, and other processes sharing the key consume the same upstream allowance. Upstream 429 still pauses the batch rather than silently retrying a paid call. A process termination cannot preserve its live network connections; saved ambiguous attempts still need explicit review.
+
+## Installer test correction
+
+A recipient laptop failed four cutout-batch tests before installation: two exceeded Vitest's default five-second budget, one removed its fixture before final background writes completed (ENOTEMPTY), and a later fault-injection check did not settle. Production's 65-image streamed HTTP integration passed on that same laptop in 14.7 seconds.
+
+The test fixture now waits for the queue to become idle and drains persisted writes before retry, restoring mocks, or deleting temporary data. Fault injections match their own exact batch path. A 30-second condition wait and 90-second per-test budget accommodate slow fsync without changing any app/provider timeouts. Optional RUGS_TEST_CUTOUT_DISK_DELAY_MS delays real test writes while retaining fsync and every correctness assertion.
+
+Validation: all352 tests/62 files and build pass; all seven affected tests additionally pass with 50ms added to every real atomic write (29.5-second file duration). Only test harness and this note changed. No production source, provider limits, images, credentials or recipient files changed. Existing updater fetches this correction automatically when rerun.
