@@ -14,9 +14,11 @@ export const MainImageSettingsSchema = z.object({
   trimThreshold: z.number().min(1).max(40).default(10),
   occupancy: z.number().int().min(40).max(100).default(90),
   frame: z.boolean().default(false),
+  transparent: z.boolean().optional(),
   background: z.string().regex(/^#[a-fA-F0-9]{6}$/).default("#f1eee8")
 }).strict();
 export const ExportPreparationSchema = z.object({
+  outputFormat: z.enum(["webp", "png"]).optional(),
   webp: WebpSettingsSchema.default(() => WebpSettingsSchema.parse({})),
   mainImages: z.record(z.string().min(1).max(240), MainImageSettingsSchema).default({})
 }).strict();

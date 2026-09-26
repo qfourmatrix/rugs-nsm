@@ -94,9 +94,9 @@ describe("family-first gallery workspace", () => {
     await act(async () => action("Export selected").click());
     expect(api.preflightGalleryExport).not.toHaveBeenCalled();
     await act(async () => action("Continue to WebP").click());
-    await act(async () => action("Download ZIP").click());
-    expect(api.preflightGalleryExport).toHaveBeenCalledWith(["rug-a"], DEFAULT_PREPARATION);
-    expect(api.startGalleryExport).toHaveBeenCalledWith(["rug-a"], { "rug-a": "fingerprint-main" }, DEFAULT_PREPARATION);
+    await act(async () => action("Shopify WebPs").click());
+    expect(api.preflightGalleryExport).toHaveBeenCalledWith(["rug-a"], { ...DEFAULT_PREPARATION, outputFormat: "webp" });
+    expect(api.startGalleryExport).toHaveBeenCalledWith(["rug-a"], { "rug-a": "fingerprint-main" }, { ...DEFAULT_PREPARATION, outputFormat: "webp" });
     expect(container.textContent).toContain("Fixture build interrupted");
     await act(async () => inclusion("runner").click());
     expect(action("Export selected").disabled).toBe(false);
@@ -124,13 +124,13 @@ describe("family-first gallery workspace", () => {
     await act(async () => action("Export selected").click());
     expect(api.preflightGalleryExport).not.toHaveBeenCalled();
     await act(async () => action("Continue to WebP").click());
-    await act(async () => action("Download ZIP").click());
+    await act(async () => action("Room-viewer PNGs").click());
     expect(api.startGalleryExport).not.toHaveBeenCalled();
     expect(container.querySelector(".galleryCheckIssues")?.textContent).toContain("Main image is not square.");
     await act(async () => action("Go fix it").click());
     expect(document.activeElement?.id).toBe("gallery-shape-rug-a--runner");
     await act(async () => action("Export 1 valid shape").click());
-    expect(api.startGalleryExport).toHaveBeenCalledWith(checked.productIds, { "rug-a": "fingerprint-main", "rug-a--runner": "bad-main" }, DEFAULT_PREPARATION);
+    expect(api.startGalleryExport).toHaveBeenCalledWith(checked.productIds, { "rug-a": "fingerprint-main", "rug-a--runner": "bad-main" }, { ...DEFAULT_PREPARATION, outputFormat: "png" });
   });
   it("keeps all-blocked selections editable and invalidates the error summary when selection changes", async () => {
     const checked = preflight();
@@ -140,7 +140,7 @@ describe("family-first gallery workspace", () => {
     await act(async () => action("Export selected").click());
     expect(api.preflightGalleryExport).not.toHaveBeenCalled();
     await act(async () => action("Continue to WebP").click());
-    await act(async () => action("Download ZIP").click());
+    await act(async () => action("Shopify WebPs").click());
     expect(container.textContent).toContain("No selected shapes passed");
     expect(api.startGalleryExport).not.toHaveBeenCalled();
     await act(async () => inclusion("area").click());
@@ -157,7 +157,7 @@ describe("family-first gallery workspace", () => {
     await act(async () => action("Export selected").click());
     expect(api.preflightGalleryExport).not.toHaveBeenCalled();
     await act(async () => action("Continue to WebP").click());
-    await act(async () => action("Download ZIP").click());
+    await act(async () => action("Shopify WebPs").click());
     expect(anchorClick).toHaveBeenCalledTimes(1);
     expect(action("Download ZIP")).toBeDefined();
     await act(async () => action("Recent exports").click());
@@ -171,7 +171,7 @@ describe("family-first gallery workspace", () => {
     await render();
     await act(async () => action("Export selected").click());
     await act(async () => action("Continue to WebP").click());
-    await act(async () => { action("Download ZIP").click(); action("Download ZIP").click(); });
+    await act(async () => { action("Shopify WebPs").click(); action("Shopify WebPs").click(); });
     expect(api.preflightGalleryExport).toHaveBeenCalledTimes(1);
     expect(action("Checking images…").disabled).toBe(true);
     await act(async () => finish(preflight()));
@@ -206,7 +206,7 @@ describe("family-first gallery workspace", () => {
     await act(async () => action("Export selected").click());
     expect(api.preflightGalleryExport).not.toHaveBeenCalled();
     await act(async () => action("Continue to WebP").click());
-    await act(async () => action("Download ZIP").click());
+    await act(async () => action("Shopify WebPs").click());
     expect(api.startGalleryExport).not.toHaveBeenCalled();
     expect(container.textContent).toContain("changed since you reviewed it");
     expect(inclusion("area").checked).toBe(false);
@@ -225,7 +225,7 @@ describe("family-first gallery workspace", () => {
     await act(async () => action("Export selected").click());
     expect(api.preflightGalleryExport).not.toHaveBeenCalled();
     await act(async () => action("Continue to WebP").click());
-    await act(async () => action("Download ZIP").click());
+    await act(async () => action("Shopify WebPs").click());
     expect(anchorClick).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Files changed during export");
     await act(async () => action("Download valid shapes").click());

@@ -384,15 +384,15 @@ export interface GalleryExportShapeReceipt {
 }
 
 export interface GalleryExportEncoderSettings {
-  format: "webp";
-  preset: "photo";
-  quality: number;
+  format: "webp" | "png";
+  preset?: "photo";
+  quality?: number;
   lossless?: boolean;
-  effort: 6;
-  smartSubsample: true;
+  effort?: 6;
+  smartSubsample?: true;
   colourSpace: "srgb";
   maximumDimension: number;
-  maximumBytes: 20971520;
+  maximumBytes: 20971520 | null;
   withoutEnlargement: true;
   metadata: "stripped";
 }
