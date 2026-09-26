@@ -2,11 +2,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { type CutoutBatch, type CutoutBatchItem } from "../shared/cutout-batch";
-import { createCutout, listCutouts, readCutoutRecords, type MainImageCutout } from "./main-image-cutouts";
+import { createCutout, CutoutNotSubmitted, listCutouts, readCutoutRecords, type MainImageCutout } from "./main-image-cutouts";
 import { atomicWriteJson, ensureDir } from "./fsUtils";
 import { conflictError } from "./errors";
 
-import { PHOTOROOM_PARALLEL_REQUESTS } from "./photoroom-limits";
+import { PHOTOROOM_PARALLEL_REQUESTS, photoroomRateLimit } from "./photoroom-limits";
 
 type Operations = { list: typeof listCutouts; create: typeof createCutout; listRecords?: typeof readCutoutRecords };
 /** One persisted batch per catalog. Workers survive tab closure; saved request IDs
@@ -67,6 +67,7 @@ export class CutoutBatchQueue {
       }
       this.batch.status = action === "pause" ? "paused" : "running";
       this.batch.error = undefined;
+      if (action === "pause") photoroomRateLimit.wake();
       await this.save(); this.launch(); return structuredClone(this.batch);
     });
   }
@@ -88,12 +89,16 @@ export class CutoutBatchQueue {
       if (!ready && !existing && saved.some(value => value.status === "failed" || value.status === "processing") && !item.retryAuthorized) {
         item.status = "attention"; item.error = "Previous attempt needs an explicit retry."; return;
       }
-      const cutout: MainImageCutout = ready ?? await this.operations.create(this.root, item.productId, item.requestId, this.apiKey());
+      if (this.batch?.status !== "running") { item.status = "queued"; return; }
+      const cutout: MainImageCutout = ready ?? await this.operations.create(this.root, item.productId, item.requestId, this.apiKey(), undefined, () => this.batch?.status === "running");
       item.status = cutout.status === "processing" ? "attention" : cutout.status;
       item.error = cutout.status === "processing" ? "Interrupted attempt: check before retrying." : cutout.error ?? undefined;
       if (cutout.status === "ready") { item.cutoutId = cutout.id; item.sourceSha256 = cutout.sourceSha256; }
-      if (cutout.error && /HTTP (401|402|403|429)/.test(cutout.error)) { this.batch!.status = "paused"; this.batch!.error = cutout.error; }
-    } catch (error) { item.status = "failed"; item.error = error instanceof Error ? error.message : "Background removal failed."; }
+      if (cutout.error && /HTTP (401|402|403|429)/.test(cutout.error)) { this.batch!.status = "paused"; this.batch!.error = cutout.error; photoroomRateLimit.wake(); }
+    } catch (error) {
+      if (error instanceof CutoutNotSubmitted) { item.status = "queued"; item.error = undefined; }
+      else { item.status = "failed"; item.error = error instanceof Error ? error.message : "Background removal failed."; }
+    }
   }
   private async run() {
     this.records = await this.operations.listRecords?.(this.root);
@@ -101,11 +106,23 @@ export class CutoutBatchQueue {
       while (this.batch?.status === "running") {
         const item = this.batch.items.find(value => value.status === "queued");
         if (!item) return;
-        item.status = "processing"; await this.save();
-        await this.process(item); await this.save();
+        item.status = "processing";
+        try { await this.save(); await this.process(item); await this.save(); }
+        catch (error) {
+          // Failure before process() means nothing was submitted for this item.
+          if (item.status === "processing") item.status = "queued";
+          throw error;
+        }
       }
     };
-    await Promise.all(Array.from({ length: PHOTOROOM_PARALLEL_REQUESTS }, worker));
+    // Wait for every active worker even if persistence fails in a sibling.
+    const outcomes = await Promise.allSettled(Array.from({ length: PHOTOROOM_PARALLEL_REQUESTS }, () => worker().catch(error => {
+      this.batch!.status = "paused";
+      photoroomRateLimit.wake();
+      throw error;
+    })));
+    const failure = outcomes.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
     if (this.batch!.status === "running" && !this.batch!.items.some(item => item.status === "queued")) this.batch!.status = "complete";
     await this.save();
   }

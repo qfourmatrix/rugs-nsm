@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import * as disk from "../server/fsUtils";
+import { expect, it, vi } from "vitest";
 import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -88,4 +89,80 @@ it("pauses new submissions on exhausted credits, preserves queued work, and resu
     expect((await queue.get())?.items.every(item => item.status === "ready")).toBe(true);
     expect(calls).toBe(72+failed);
   } finally { await rm(root, { recursive:true, force:true }); }
+});
+
+it("does not submit work that finishes its local checks after the batch was paused", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "cutout-pause-"));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let checking = 0, calls = 0;
+  const queue = new CutoutBatchQueue(root, () => "test", {
+    list: async () => { checking++; await gate; return []; },
+    create: async (_root, id, request) => { calls++; return record(id, request); }
+  });
+  try {
+    await queue.start(randomUUID(), ["a", "b", "c"]);
+    await until(async () => checking === 3);
+    await queue.control("pause"); release();
+    await until(async () => (await queue.get())!.items.every(item => item.status !== "processing"));
+    expect(calls).toBe(0);
+    expect((await queue.get())!.items.every(item => item.status === "queued")).toBe(true);
+    await queue.control("resume");
+    await until(async () => (await queue.get())!.status === "complete");
+    expect(calls).toBe(3);
+  } finally { release(); await rm(root, { recursive: true, force: true }); }
+});
+
+it("keeps ownership of active requests after a sibling result fails to persist", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "cutout-disk-"));
+  let releaseA!: () => void, releaseB!: () => void;
+  const a = new Promise<void>(resolve => { releaseA = resolve; });
+  const b = new Promise<void>(resolve => { releaseB = resolve; });
+  let calls = 0, failed = false;
+  const write = disk.atomicWriteJson;
+  const spy = vi.spyOn(disk, "atomicWriteJson").mockImplementation(async (file, value, options) => {
+    const batch = value as CutoutBatch;
+    if (!failed && file.endsWith("cutout-batch.json") && batch.items?.[0].status === "ready" && batch.items?.[1].status === "processing") {
+      failed = true; throw new Error("Disk write failed");
+    }
+    await write(file, value, options);
+  });
+  const queue = new CutoutBatchQueue(root, () => "test", {
+    list: async () => [],
+    create: async (_root, id, request) => { calls++; await (id === "a" ? a : b); return record(id, request); }
+  });
+  try {
+    await queue.start(randomUUID(), ["a", "b"]);
+    await until(async () => calls === 2); releaseA();
+    await until(async () => (await queue.get())!.status === "paused");
+    await expect(queue.control("retry")).rejects.toMatchObject({ code: "CUTOUT_BATCH_BUSY" });
+    await expect(queue.start(randomUUID(), ["c"])).rejects.toMatchObject({ code: "CUTOUT_BATCH_ACTIVE" });
+    releaseB();
+    await until(async () => !(queue as unknown as {running:boolean}).running);
+    expect((await queue.get())!.items.every(item => item.status === "ready")).toBe(true);
+    await queue.control("resume");
+    await until(async () => (await queue.get())!.status === "complete");
+    expect(calls).toBe(2);
+  } finally { releaseA(); releaseB(); spy.mockRestore(); await rm(root, {recursive:true, force:true}); }
+});
+
+it("keeps an item queued when its pre-submission batch save fails", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "cutout-disk-before-"));
+  let fail = true, calls = 0;
+  const write = disk.atomicWriteJson;
+  const spy = vi.spyOn(disk, "atomicWriteJson").mockImplementation(async (file, value, options) => {
+    if (fail && (value as CutoutBatch).items?.some(item => item.status === "processing")) { fail = false; throw new Error("Disk unavailable"); }
+    await write(file, value, options);
+  });
+  const queue = new CutoutBatchQueue(root, () => "test", {
+    list: async () => [], create: async (_root, id, request) => { calls++; return record(id, request); }
+  });
+  try {
+    await queue.start(randomUUID(), ["a"]);
+    await until(async () => (await queue.get())!.status === "paused" && !(queue as unknown as {running:boolean}).running);
+    expect(calls).toBe(0); expect((await queue.get())!.items[0].status).toBe("queued");
+    await queue.control("resume");
+    await until(async () => (await queue.get())!.status === "complete");
+    expect(calls).toBe(1);
+  } finally { spy.mockRestore(); await rm(root, {recursive:true, force:true}); }
 });

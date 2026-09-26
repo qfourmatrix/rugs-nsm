@@ -89,3 +89,34 @@ it("keeps a real stalled TLS connection alive beyond Undici's old ten-second dea
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 }, 15_000);
+
+it("wakes paused, unsent admissions without consuming allowance", async () => {
+  vi.useFakeTimers();
+  const limiter = new PhotoroomRateLimit();
+  await Promise.all(Array.from({ length: 60 }, () => limiter.acquire()));
+  let paused = false, sent = 0;
+  const waiting = Array.from({ length: 10 }, () => limiter.acquire(() => {
+    if (paused) throw new Error("paused");
+  }).then(() => { sent++; }, error => error.message));
+  await vi.advanceTimersByTimeAsync(0);
+  paused = true; limiter.wake();
+  expect(await Promise.all(waiting)).toEqual(Array(10).fill("paused"));
+  expect(sent).toBe(0);
+  await vi.advanceTimersByTimeAsync(60_000);
+  await Promise.all(Array.from({ length: 60 }, () => limiter.acquire().then(() => { sent++; })));
+  expect(sent).toBe(60);
+});
+
+it("dates admission after slow pre-send persistence rather than before it", async () => {
+  vi.useFakeTimers();
+  const limiter = new PhotoroomRateLimit();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const first = limiter.acquire(undefined, () => held);
+  await vi.advanceTimersByTimeAsync(59_000); release(); await first;
+  await Promise.all(Array.from({ length: 59 }, () => limiter.acquire()));
+  let next = false;
+  const waiting = limiter.acquire().then(() => { next = true; });
+  await vi.advanceTimersByTimeAsync(59_999); expect(next).toBe(false);
+  await vi.advanceTimersByTimeAsync(1); await waiting; expect(next).toBe(true);
+});

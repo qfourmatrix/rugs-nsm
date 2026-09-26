@@ -12,3 +12,19 @@ Verified September 26, 2026 against https://docs.photoroom.com/getting-started/f
 Validation: rolling-window boundary/burst tests, a 65-image batch with 60 held requests, persisted results, failure isolation, credit pause/retry and recovery tests, ten-minute simulated response, and a real local stalled TLS connection beyond eleven seconds. No paid provider calls. Full suite and production build passed; existing client bundle warning unchanged.
 
 Install with the existing export updater after active requests have finished. Publication does not update an already-running Studio process. Restarting a process cannot preserve an in-flight TCP request; ambiguous saved attempts require explicit review rather than automatic resubmission.
+
+## Follow-up audit
+
+The audit found and corrected gaps in pause/recovery and resource handling:
+
+- Recheck pause before actual submission and wake rate-gated work immediately. Work that never reached HTTP returns to queued with its original request ID. Paid in-flight requests remain alive.
+- Persist the ambiguous-attempt marker immediately before dispatch, after normalization and rate waiting. A crash during unsent waiting no longer falsely requires a paid retry. Record the rate timestamp after disk persistence, so slow saves cannot shift an earlier reserved burst into a later window.
+- Stream source hashes and normalized multipart uploads from temporary files. Only two normalizations run at once; no retained sixty-way PNG/Blob copies. Temporary files are removed after success, failure, or an unsent pause.
+- Revalidate saved cutout files and their hashes before reuse, including replay of an existing request ID. Missing/changed output requires explicit review/retry; changed base images cannot reuse stale requests.
+- Keep batch ownership until every worker settles after a persistence failure. A failed pre-submission save returns the item to queued; sibling network calls remain active.
+
+Verification: 352 tests across 62 files and production build passed. A 65-product integration test uses real streamed multipart HTTP requests against a local server, holds the first 60, verifies five unsent jobs have no attempt records, pauses without aborting active sockets, resumes, validates all 65 saved results, checks temporary-file cleanup, and reloads without duplicates. Real HTTP header/body tests advance Undici's own test clock beyond ten minutes; a real stalled TLS test waits eleven seconds. Additional tests cover rolling-window boundaries, slow persistence, disk failures, failed saved-cutout reuse and explicit retry.
+
+Browser smoke used a disposable saved-cutout catalog with PHOTOROOM_API_KEY removed: production preview on localhost:5421, 1280×900 and 390×844, export preparation, rotate and grid controls, no framework overlay, no horizontal overflow, and no console errors. Browser plugin was unavailable; existing Playwright/Chrome performed the check. Temporary QA servers were stopped. No paid provider calls and no live catalog or recipient-process changes.
+
+Limits: this does not verify the current provider account balance or live provider availability. The rate gate is per Studio process; restarting it resets its rolling history, and other processes sharing the key consume the same upstream allowance. Upstream 429 still pauses the batch rather than silently retrying a paid call. A process termination cannot preserve its live network connections; saved ambiguous attempts still need explicit review.

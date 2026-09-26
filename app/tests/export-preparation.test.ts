@@ -74,3 +74,17 @@ it("deduplicates paid cutout attempts, requires approval, rejects stale sources 
     expect(await listCutouts(root, "rug")).toHaveLength(0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+it("does not reuse a saved ready cutout whose image is missing", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "cutout-missing-"));
+  try {
+    await mkdir(path.join(root, "rug"));
+    const source = await sharp({ create: { width: 8, height: 8, channels: 4, background: "transparent" } }).png().toBuffer();
+    await writeFile(path.join(root, "rug", "base.png"), source);
+    const id = randomUUID();
+    await createCutout(root, "rug", id, "test", async () => ({ image: source, uncertainty: null }));
+    await rm(path.join(root, ".product-shot-queue", "main-image-cutouts", `${id}.png`));
+    expect((await listCutouts(root, "rug"))[0]).toMatchObject({ status: "failed", approved: false });
+    await expect(createCutout(root, "rug", id, "test")).rejects.toMatchObject({ code: "CUTOUT_CHANGED" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
