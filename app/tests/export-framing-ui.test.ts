@@ -11,7 +11,7 @@ vi.mock("../src/api", () => ({ ApiError: class extends Error {}, getCutoutBatch:
 let root:Root,container:HTMLDivElement,latest:Preparation;
 const download=vi.fn();
 const products=Array.from({length:7},(_,i)=>({id:`rug-${i}`,familyId:`family-${Math.floor(i/3)}`,name:`Rug ${i}`,shape:["area","runner","round"][i%3],baseImage:"base.png"} as ProductSummary));
-function Harness({items=products}:{items?:ProductSummary[]}){const [value,setValue]=useState({...DEFAULT_PREPARATION,mainImages:Object.fromEntries(items.map(p=>[p.id,{...DEFAULT_MAIN_IMAGE,frame:true}]))});latest=value;return createElement(ExportPreparation,{products:items,value,onChange:setValue,onBack:vi.fn(),onContinue:download});}
+function Harness({items=products,initial}:{items?:ProductSummary[];initial?:Preparation}){const [value,setValue]=useState(initial ?? {...DEFAULT_PREPARATION,mainImages:Object.fromEntries(items.map(p=>[p.id,{...DEFAULT_MAIN_IMAGE,frame:true}]))});latest=value;return createElement(ExportPreparation,{products:items,value,onChange:setValue,onBack:vi.fn(),onContinue:download});}
 const button=(label:string)=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.trim()===label)!;
 beforeEach(()=>{vi.useFakeTimers();vi.clearAllMocks();localStorage.clear();vi.mocked(api.getCutoutBatch).mockResolvedValue(null);vi.mocked(api.getPhotoroomStatus).mockResolvedValue({configured:false});vi.mocked(api.getMainCutouts).mockResolvedValue([]);vi.mocked(api.getGallerySelection).mockResolvedValue({assetIds:[]} as never);vi.mocked(api.getGenerated).mockResolvedValue({active:[],trash:[],aggregates:{}});vi.mocked(api.previewGalleryExport).mockImplementation(async()=>({image:"data:image/webp;base64,AA==",reference:"data:image/png;base64,AA==",width:600,height:600,sourceBytes:100,outputBytes:50,sourceSha256:"a".repeat(64)}));container=document.createElement("div");document.body.append(container);root=createRoot(container);});
 afterEach(async()=>{await act(async()=>root.unmount());container.remove();vi.useRealTimers();});
@@ -105,4 +105,48 @@ it("shows large collections without pages, reuses previews and approves beyond t
  await act(async()=>button("Approve all").click());
  expect(Object.values(latest.mainImages).filter(s=>s.reviewedSourceSha256)).toHaveLength(70);
  expect(api.previewGalleryExport).toHaveBeenCalledTimes(71);
+});
+
+it("refreshes cached previews, invalidates changed sources and recovers failed refreshes", async () => {
+ await act(async()=>root.render(createElement(Harness)));
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ await act(async()=>button("Approve all").click());
+ const previous = vi.mocked(api.previewGalleryExport).getMockImplementation()!;
+ vi.mocked(api.previewGalleryExport).mockImplementation(async (...args)=>({...await previous(...args),sourceSha256:args[0]==="rug-0"?"b".repeat(64):"a".repeat(64)}));
+ await act(async()=>button("Update preview").click());
+ expect(api.previewGalleryExport).toHaveBeenCalledTimes(14);
+ expect(button("Continue to WebP").disabled).toBe(true);
+ await act(async()=>button("Approve all").click());
+ expect(latest.mainImages["rug-0"].reviewedSourceSha256).toBe("b".repeat(64));
+ expect(button("Continue to WebP").disabled).toBe(false);
+ vi.mocked(api.previewGalleryExport).mockRejectedValueOnce(new Error("image unavailable"));
+ await act(async()=>button("Update preview").click());
+ expect(container.textContent).toContain("Preview failed · update to retry");
+ expect(button("Continue to WebP").disabled).toBe(true);
+ await act(async()=>button("Update preview").click());
+ expect(button("Continue to WebP").disabled).toBe(false);
+});
+it("preserves unselected rug settings when applying an individual canvas to the selection", async () => {
+ const untouched={...DEFAULT_MAIN_IMAGE,rotation:45,frame:true,transparent:true};
+ const initial={...DEFAULT_PREPARATION,mainImages:{...Object.fromEntries(products.map(p=>[p.id,{...DEFAULT_MAIN_IMAGE,frame:true}])),unselected:untouched}};
+ await act(async()=>root.render(createElement(Harness,{initial})));
+ await act(async()=>button("Image detail").click());
+ await act(async()=>button("Apply canvas settings to all main images").click());
+ expect(latest.mainImages.unselected).toEqual(untouched);
+ expect(initialExportPreparation().mainImages.unselected).toEqual(untouched);
+});
+it("retains successful bulk approvals after an error and rejects settings changed mid-approval", async () => {
+ const initial={...DEFAULT_PREPARATION,mainImages:Object.fromEntries(products.map(p=>[p.id,{...DEFAULT_MAIN_IMAGE,frame:true,cutoutId:crypto.randomUUID()}]))};
+ let release!:()=>void;
+ vi.mocked(api.approveMainCutout).mockImplementationOnce(()=>new Promise(resolve=>{release=()=>resolve({} as never);})).mockRejectedValueOnce(new Error("cutout changed")).mockResolvedValue({} as never);
+ await act(async()=>root.render(createElement(Harness,{initial})));
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ await act(async()=>button("Approve all").click());
+ await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Rotate family-0 area right"]')!.click());
+ await act(async()=>release());
+ expect(latest.mainImages["rug-0"].reviewedSourceSha256).toBeUndefined();
+ expect(latest.mainImages["rug-1"].reviewedSourceSha256).toBeUndefined();
+ expect(Object.values(latest.mainImages).filter(s=>s.reviewedSourceSha256)).toHaveLength(5);
+ expect(container.textContent).toContain("cutout changed");
+ expect(api.removeMainBackground).not.toHaveBeenCalled();
 });

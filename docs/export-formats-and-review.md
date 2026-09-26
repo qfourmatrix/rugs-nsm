@@ -14,3 +14,9 @@ The download step offers:
 Both ZIPs include untouched source originals and a manifest. Prepared PNGs are in each shape's `room-viewer` folder; WebPs remain in `shopify`. Format is included in validation fingerprints and conversion cache keys. Missing or unapproved cutouts block transparent export instead of silently exporting an opaque image.
 
 Validation: 357 tests in 62 files; production build; desktop 1280×900 and mobile 390×844 production-browser checks, six saved cutouts across four families, real PNG ZIP download, no browser errors. Tests verify actual alpha pixels, preview/archive byte equality, distinct formats, full-gallery versus main-only selection, approval failures and a 70-family collection without pagination. No paid provider requests were used. Existing client bundle-size warning remains.
+
+## Follow-up edge-case audit
+
+Manual Update preview now bypasses the collection cache. A changed source or failed refresh invalidates the visible approval state; failed previews have an explicit retry message and cannot be bulk-approved from stale cached content. Automatic per-image refresh still reuses unchanged previews. Applying an individual canvas to selected main images now preserves saved settings for unselected rugs.
+
+Additional regressions cover changed-source reapproval, refresh failure/recovery, unselected draft preservation, partial approval errors and a rotation during an in-flight approval. Full suite: 360 tests / 62 files; production build passes.
