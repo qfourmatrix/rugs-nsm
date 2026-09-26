@@ -117,7 +117,7 @@ it("never overlaps slow export polls, skips hidden tabs and aborts on unmount", 
   expect(exportButton.disabled).toBe(false);
   await act(async () => exportButton.click());
   await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Continue to WebP")!.click());
-  const buildButton = [...container.querySelectorAll("button")].find(button => button.textContent === "Download ZIP")!;
+  const buildButton = [...container.querySelectorAll("button")].find(button => button.textContent === "Shopify WebPs")!;
   await act(async () => buildButton.click());
   expect(getGalleryExportJob).toHaveBeenCalledTimes(1);
   expect(onExportStarted).toHaveBeenCalledWith("export_test");

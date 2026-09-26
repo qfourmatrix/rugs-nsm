@@ -140,10 +140,10 @@ function timestampSlug(date: Date) {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
-function outputName(product: ProductSummary, item: ResolvedExportItem) {
+function outputName(product: ProductSummary, item: ResolvedExportItem, format: "webp" | "png" = "webp") {
   const prefix = `${archiveSegment(product.familyId, "family")}-${product.shape}-${String(item.position).padStart(2, "0")}`;
   const suffix = item.role === "main" ? "main" : archiveSegment(item.shotId, "generated").replaceAll("_", "-");
-  return `${prefix}-${suffix}.webp`;
+  return `${prefix}-${suffix}.${format}`;
 }
 
 function orientedDimensions(metadata: { autoOrient: { width: number; height: number } }): ExportImageDimensions {
@@ -164,7 +164,7 @@ async function validateShopifyConversion(productRoot: string, sourcePath: string
   return conversionScheduler.run(async () => {
   if (await sha256File(sourcePath) !== sourceHash) throw conflictError("CONTENT_CHANGED", "Source image changed during export checks.");
   const cutout = main?.cutoutId ? await resolveCutout(productRoot, productId!, main.cutoutId, sourceHash, true) : undefined;
-  const key = createHash("sha256").update(JSON.stringify([productRoot, sourceHash, GALLERY_EXPORT_ENCODER, preparation.webp, main, cutout?.record.outputSha256])).digest("hex");
+  const key = createHash("sha256").update(JSON.stringify([productRoot, sourceHash, GALLERY_EXPORT_ENCODER, preparation.webp, preparation.outputFormat, main, cutout?.record.outputSha256])).digest("hex");
   await pruneConversions();
   const cached = conversionCache.get(key);
   if (cached) {
@@ -187,12 +187,12 @@ async function validateShopifyConversion(productRoot: string, sourcePath: string
   try {
   if (await sha256File(snapshot) !== (cutout?.record.outputSha256 ?? sourceHash)) throw conflictError("CONTENT_CHANGED", "Source image changed while preparing conversion.");
   conversionEncodes++;
-  const { data, info } = await encodeExportImage(snapshot, preparation.webp, main);
-  if (data.byteLength >= MAX_SHOPIFY_BYTES) {
+  const { data, info } = await encodeExportImage(snapshot, preparation.webp, main, preparation.outputFormat);
+  if (preparation.outputFormat !== "png" && data.byteLength >= MAX_SHOPIFY_BYTES) {
     throw new Error("Shopify WebP is 20 MB or larger.");
   }
   if (info.width !== info.height) throw new Error("Shopify WebP is not square.");
-  const file = path.join(cacheDirectory, `${randomUUID()}.webp`);
+  const file = path.join(cacheDirectory, `${randomUUID()}.${preparation.outputFormat ?? "webp"}`);
   await fs.writeFile(file, data, { flag: "wx" });
   const previous = conversionCache.get(key);
   if (previous) await fs.rm(previous.file, { force: true });
@@ -268,7 +268,7 @@ async function inspectShape({
 
   const selectedAssets: AssetRecord[] = [];
 
-  for (const [index, assetId] of selectionAssetIds.entries()) {
+  for (const [index, assetId] of (preparation.outputFormat === "png" ? [] : selectionAssetIds).entries()) {
     let activeAsset: AssetRecord | undefined;
     let rejectedAsset: AssetRecord | undefined;
     try {
@@ -317,7 +317,7 @@ async function inspectShape({
   const masterShotIds = new Set(masterShots.map((shot) => shot.id));
   const selectedShotIds = new Set(selectedAssets.map((asset) => asset.shotId));
   if (selectionAssetIds.length === 0) issues.push(issue(product, "warning", "BASE_ONLY_GALLERY", "Base-only gallery: no generated shots selected."));
-  for (const shot of selectionAssetIds.length ? masterShots : []) {
+  for (const shot of preparation.outputFormat !== "png" && selectionAssetIds.length ? masterShots : []) {
     if (!selectedShotIds.has(shot.id)) {
       issues.push(issue(product, "warning", "MISSING_MASTER_SHOT", `${shot.name} is not selected.`));
     }
@@ -338,6 +338,10 @@ async function inspectShape({
 
   for (const item of items) {
     const mainSettings = item.role === "main" ? preparation.mainImages[product.id] : undefined;
+    if ((mainSettings?.transparent || preparation.outputFormat === "png") && !mainSettings?.cutoutId) {
+      issues.push(issue(product, "blocker", "CUTOUT_REQUIRED", "Remove the main-image background and approve the cutout before transparent export."));
+      continue;
+    }
     if (mainSettings && mainSettings.reviewedSourceSha256 !== item.sourceSha256) {
       issues.push(issue(product, "blocker", "MAIN_REVIEW_REQUIRED", "Main image changed or has not been approved. Preview and approve its export preparation."));
       continue;
@@ -365,7 +369,7 @@ async function inspectShape({
     familyId: product.familyId,
     shape: product.shape,
     status: issues.some((candidate) => candidate.severity === "blocker") ? "skipped" : "ready",
-    itemCount: 1 + selectionAssetIds.length,
+    itemCount: preparation.outputFormat === "png" ? 1 : 1 + selectionAssetIds.length,
     galleryRevision,
     exportReady,
     contentFingerprint: createHash("sha256").update(JSON.stringify({ preparation, galleryRevision, selectionAssetIds, sources: items.map((item) => [item.sourceFile, item.sourceSha256]) })).digest("hex"),
@@ -474,12 +478,12 @@ export async function buildGalleryExport({
   await ensureDir(tempDir);
   const workDir = path.join(tempDir, "shopify");
   await ensureDir(workDir);
-  const archiveFilename = `rugs-nsm-export-${timestampSlug(new Date(createdAt))}.zip`;
+  const archiveFilename = `rugs-nsm-${preparation.outputFormat === "png" ? "room-viewer-png" : "export"}-${timestampSlug(new Date(createdAt))}.zip`;
   const archivePath = safeChildPath(tempDir, archiveFilename);
   const total = ready.reduce((sum, candidate) => sum + candidate.items.length * 3, 1);
   let completed = 0;
   const report = (message: string) => onProgress({ completed, total, message });
-  report("Preparing Shopify images");
+  report(preparation.outputFormat === "png" ? "Preparing transparent room-viewer PNGs" : "Preparing Shopify images");
 
   const receiptShapes: GalleryExportShapeReceipt[] = [];
   const fileEntries: Array<{ sourcePath: string; archivePath: string }> = [];
@@ -507,13 +511,15 @@ export async function buildGalleryExport({
       const originalSnapshot = safeChildPath(workDir, `${candidate.product.id}-${item.position}-original-${item.sourceFile}`);
       await fs.copyFile(item.sourcePath, originalSnapshot);
       if (await sha256File(originalSnapshot) !== item.sourceSha256) throw conflictError("CONTENT_CHANGED", "An image changed during export. Run preflight again.");
-      const shopifyFilename = outputName(candidate.product, item);
+      const shopifyFilename = outputName(candidate.product, item, preparation.outputFormat);
       const stagedName = `${candidate.product.id}-${item.position}-${shopifyFilename}`;
       const stagedPath = safeChildPath(workDir, stagedName);
-      const converted = await writeShopifyFile(productRoot, { ...item, sourcePath: originalSnapshot }, stagedPath, preparation, item.role === "main" ? preparation.mainImages[candidate.product.id] : undefined, candidate.product.id);
+      const mainSettings = item.role === "main" ? preparation.mainImages[candidate.product.id] : undefined;
+      const exportSettings = mainSettings && preparation.outputFormat === "png" ? { ...mainSettings, transparent: true } : mainSettings;
+      const converted = await writeShopifyFile(productRoot, { ...item, sourcePath: originalSnapshot }, stagedPath, preparation, exportSettings, candidate.product.id);
       signal?.throwIfAborted();
       const originalArchivePath = `${familySegment}/${shapeSegment}/originals/${item.sourceFile}`;
-      const shopifyArchivePath = `${familySegment}/${shapeSegment}/shopify/${shopifyFilename}`;
+      const shopifyArchivePath = `${familySegment}/${shapeSegment}/${preparation.outputFormat === "png" ? "room-viewer" : "shopify"}/${shopifyFilename}`;
       imageReceipts.push({
         position: item.position,
         role: item.role,
@@ -561,7 +567,11 @@ export async function buildGalleryExport({
     completedAt,
     requestedProductIds: [...productIds],
     notSelectedShapes,
-    encoder: { ...GALLERY_EXPORT_ENCODER, ...preparation.webp },
+    encoder: preparation.outputFormat === "png" ? {
+      format: "png" as const, lossless: true, colourSpace: "srgb" as const,
+      maximumDimension: preparation.webp.maximumDimension, maximumBytes: null,
+      withoutEnlargement: true as const, metadata: "stripped" as const
+    } : { ...GALLERY_EXPORT_ENCODER, ...preparation.webp },
     preparation,
     shapes: receiptShapes,
     includedShapes: receiptShapes.filter((shape) => shape.status === "included").length,
@@ -801,17 +811,18 @@ export async function previewGalleryExportImage(productRoot: string, productId: 
   return conversionScheduler.run(async () => {
     const source = await fs.readFile(sourcePath);
     const main = assetId ? undefined : preparation.mainImages[productId];
+    const exportMain = main && preparation.outputFormat === "png" ? { ...main, transparent: true } : main;
     const sourceHash = createHash("sha256").update(source).digest("hex");
     const cutout = main?.cutoutId ? await resolveCutout(productRoot, productId, main.cutoutId, sourceHash, false) : undefined;
     const imageSource = cutout ? await fs.readFile(cutout.file) : source;
-    const prepared = await prepareExportImage(imageSource, main);
+    const prepared = await prepareExportImage(imageSource, exportMain);
     if (purpose === "layout") {
       const { data, info } = await sharp(prepared).resize({ width: 600, height: 600, fit: "inside", withoutEnlargement: true }).png().toBuffer({ resolveWithObject: true });
       const image = `data:image/png;base64,${data.toString("base64")}`;
       return { image, reference: "", sourceBytes: source.length, outputBytes: data.length, width: info.width, height: info.height, sourceSha256: sourceHash };
     }
-    const { data, info } = await encodePreparedExportImage(prepared, preparation.webp);
+    const { data, info } = await encodePreparedExportImage(prepared, preparation.webp, preparation.outputFormat);
     const reference = await sharp(prepared).resize({ width: info.width, height: info.height, fit: "inside", withoutEnlargement: true }).png().toBuffer();
-    return { image: `data:image/webp;base64,${data.toString("base64")}`, reference: `data:image/png;base64,${reference.toString("base64")}`, sourceBytes: source.length, outputBytes: data.length, width: info.width, height: info.height, sourceSha256: createHash("sha256").update(source).digest("hex") };
+    return { image: `data:image/${preparation.outputFormat ?? "webp"};base64,${data.toString("base64")}`, reference: `data:image/png;base64,${reference.toString("base64")}`, sourceBytes: source.length, outputBytes: data.length, width: info.width, height: info.height, sourceSha256: createHash("sha256").update(source).digest("hex") };
   });
 }

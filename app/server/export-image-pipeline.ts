@@ -30,17 +30,19 @@ export async function prepareExportImage(source: string | Buffer, settings?: Mai
   if (settings.frame) {
     const metadata = await sharp(data).metadata();
     const side = Math.ceil(Math.max(metadata.width!, metadata.height!) / (settings.occupancy / 100));
-    data = await sharp(data).flatten({ background: settings.background }).resize({ width: side, height: side, fit: "contain", background: settings.background, withoutEnlargement: true }).png({ compressionLevel: 0 }).toBuffer();
+    const framed = settings.transparent ? sharp(data) : sharp(data).flatten({ background: settings.background });
+    data = await framed.resize({ width: side, height: side, fit: "contain", background: settings.transparent ? { r: 0, g: 0, b: 0, alpha: 0 } : settings.background, withoutEnlargement: true }).png({ compressionLevel: 0 }).toBuffer();
   }
   return data;
 }
 
-export async function encodeExportImage(source: string | Buffer, webp: WebpSettings, main?: MainImageSettings) {
+export async function encodeExportImage(source: string | Buffer, webp: WebpSettings, main?: MainImageSettings, format: "webp" | "png" = "webp") {
   const prepared = await prepareExportImage(source, main);
-  return encodePreparedExportImage(prepared, webp);
+  return encodePreparedExportImage(prepared, webp, format);
 }
 
-export function encodePreparedExportImage(prepared: Buffer, webp: WebpSettings) {
-  return sharp(prepared).resize({ width: webp.maximumDimension, height: webp.maximumDimension, fit: "inside", withoutEnlargement: true })
-    .webp({ preset: "photo", quality: webp.quality, lossless: webp.lossless, effort: 6, smartSubsample: true }).toBuffer({ resolveWithObject: true });
+export function encodePreparedExportImage(prepared: Buffer, webp: WebpSettings, format: "webp" | "png" = "webp") {
+  const resized = sharp(prepared).resize({ width: webp.maximumDimension, height: webp.maximumDimension, fit: "inside", withoutEnlargement: true });
+  if (format === "png") return resized.png({ compressionLevel: 9 }).toBuffer({ resolveWithObject: true });
+  return resized.webp({ preset: "photo", quality: webp.quality, lossless: webp.lossless, effort: 6, smartSubsample: true }).toBuffer({ resolveWithObject: true });
 }

@@ -431,20 +431,23 @@ export function GalleryExportWorkspace({
     }
   };
 
-  const exportSelected = async () => {
+  const checkedPreparationRef = useRef(preparation);
+  const exportSelected = async (format: "webp" | "png" = "webp") => {
     if (selectedProductIds.length === 0 || workflowLocked || exportInFlightRef.current) return;
     exportInFlightRef.current = true;
     const requestId = preflightRequestIdRef.current + 1;
     preflightRequestIdRef.current = requestId;
     const fingerprint = selectionFingerprintRef.current;
     const productIds = [...selectedProductIds];
+    const exportPreparation = { ...preparation, outputFormat: format };
+    checkedPreparationRef.current = exportPreparation;
     setChecking(true);
     setError(null);
     setExportJob(null);
     setPreflight(null);
     setPreflightFingerprint(null);
     try {
-      const result = await preflightGalleryExport(productIds, preparation);
+      const result = await preflightGalleryExport(productIds, exportPreparation);
       if (preflightRequestIdRef.current === requestId && selectionFingerprintRef.current === fingerprint) {
         const changed = result.shapes.filter((shape) => shape.galleryRevision !== undefined && shape.galleryRevision !== (gallerySummaries[shape.productId]?.revision ?? products.find((product) => product.id === shape.productId)?.galleryRevision ?? 0));
         if (changed.length) {
@@ -474,7 +477,7 @@ export function GalleryExportWorkspace({
     setStartingExport(true);
     try {
       const expectedFingerprints = Object.fromEntries(checked.shapes.filter((shape) => shape.contentFingerprint).map((shape) => [shape.productId, shape.contentFingerprint!]));
-      const job = await startGalleryExport(productIds, expectedFingerprints, preparation);
+      const job = await startGalleryExport(productIds, expectedFingerprints, checkedPreparationRef.current);
       setExportJob(job);
       onExportStarted?.(job.exportId);
     } catch (exportError) {
@@ -518,7 +521,7 @@ export function GalleryExportWorkspace({
           </div>
         </header>
 
-        {preparing ? <ExportPreparation products={products.filter(product => selectedIds.has(product.id))} value={preparation} onChange={setPreparation} onBack={() => setPreparing(false)} onContinue={() => { setPreparing(false); void exportSelected(); }} /> : <>
+        {preparing ? <ExportPreparation products={products.filter(product => selectedIds.has(product.id))} value={preparation} onChange={setPreparation} onBack={() => setPreparing(false)} onContinue={format => { setPreparing(false); void exportSelected(format); }} /> : <>
         <div className="galleryExportBody">
           <aside className="galleryFamilyPanel">
             <div className="galleryPanelHeading">
