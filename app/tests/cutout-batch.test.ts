@@ -11,7 +11,7 @@ async function until(check: () => Promise<boolean>) {
   for (let i = 0; i < 300; i++) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
   throw new Error("Batch did not settle");
 }
-it("queues the whole selection once, overlaps four requests, persists results, and isolates failures", async () => {
+it("queues the whole selection once, overlaps sixty requests, persists results, and isolates failures", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "cutout-batch-"));
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
   let calls = 0, active = 0, peak = 0;
@@ -20,17 +20,17 @@ it("queues the whole selection once, overlaps four requests, persists results, a
     create: async (_root, productId, id) => { calls++; active++; peak = Math.max(active, peak); await gate; active--; if (productId === "rug-1") throw new Error("Bad image"); return record(productId, id); }
   });
   try {
-    const id = randomUUID(), products = Array.from({ length: 9 }, (_, i) => `rug-${i}`);
+    const id = randomUUID(), products = Array.from({ length: 65 }, (_, i) => `rug-${i}`);
     await queue.start(id, products);
-    await until(async () => active === 4);
-    await queue.start(id, products); expect(calls).toBe(4);
+    await until(async () => active === 60);
+    await queue.start(id, products); expect(calls).toBe(60);
     release(); await until(async () => (await queue.get())?.status === "complete");
     const completed = await queue.get();
-    expect(peak).toBe(4); expect(calls).toBe(9);
-    expect(completed?.items.filter(item => item.status === "ready")).toHaveLength(8);
+    expect(peak).toBe(60); expect(calls).toBe(65);
+    expect(completed?.items.filter(item => item.status === "ready")).toHaveLength(64);
     expect(completed?.items.filter(item => item.status === "failed")).toHaveLength(1);
     const persisted = JSON.parse(await readFile(path.join(root, ".product-shot-queue", "cutout-batch.json"), "utf8"));
-    expect(persisted.items.filter((item: {status:string}) => item.status === "ready")).toHaveLength(8);
+    expect(persisted.items.filter((item: {status:string}) => item.status === "ready")).toHaveLength(64);
   } finally { release(); await rm(root, { recursive: true, force: true }); }
 });
 it("reuses saved successes, leaves historical failures for an explicit batch retry, then retries only failures", async () => {
@@ -76,16 +76,16 @@ it("pauses new submissions on exhausted credits, preserves queued work, and resu
     create: async (_root, id, request) => { calls++; return funded ? record(id, request) : { ...record(id, request, "failed"), error: "Photoroom returned HTTP 402." }; }
   });
   try {
-    await queue.start(randomUUID(), Array.from({length:12}, (_, i) => `rug-${i}`));
+    await queue.start(randomUUID(), Array.from({length:72}, (_, i) => `rug-${i}`));
     await until(async () => { const batch = await queue.get(); return batch?.status === "paused" && batch.items.every(item => item.status !== "processing"); });
-    expect(calls).toBeLessThanOrEqual(4);
+    expect(calls).toBeLessThanOrEqual(60);
     const failed = calls;
-    expect((await queue.get())?.items.filter(item => item.status === "queued")).toHaveLength(12-failed);
+    expect((await queue.get())?.items.filter(item => item.status === "queued")).toHaveLength(72-failed);
     funded = true;
     await new Promise(resolve => setTimeout(resolve, 10));
     await queue.control("retry");
     await until(async () => (await queue.get())?.status === "complete");
     expect((await queue.get())?.items.every(item => item.status === "ready")).toBe(true);
-    expect(calls).toBe(12+failed);
+    expect(calls).toBe(72+failed);
   } finally { await rm(root, { recursive:true, force:true }); }
 });
