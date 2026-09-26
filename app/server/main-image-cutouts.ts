@@ -9,6 +9,8 @@ import { atomicWriteJson, ensureDir, regularFileExists, safeChildPath, sha256Fil
 import { conflictError, notFoundError, validationError } from "./errors";
 import { WorkScheduler } from "./work-scheduler";
 
+import { PHOTOROOM_PARALLEL_REQUESTS, photoroomRateLimit } from "./photoroom-limits";
+
 export const CutoutRequestSchema = z.object({ productId: z.string().min(1).max(240), requestId: z.string().uuid() }).strict();
 export const CutoutApprovalSchema = z.object({ approved: z.boolean() }).strict();
 export interface MainImageCutout {
@@ -16,7 +18,9 @@ export interface MainImageCutout {
   status: "processing" | "ready" | "failed"; approved: boolean; createdAt: string;
   uncertainty: number | null; error: string | null; provider: "photoroom";
 }
-const scheduler = new WorkScheduler(4, 16);
+const scheduler = new WorkScheduler(PHOTOROOM_PARALLEL_REQUESTS, 5000);
+// Bound CPU-heavy normalization independently from network concurrency.
+const preparation = new WorkScheduler(2, 5000);
 const productPending = new Map<string, Promise<MainImageCutout>>();
 const pending = new Map<string, Promise<MainImageCutout>>();
 const directory = (root: string) => path.join(root, ".product-shot-queue", "main-image-cutouts");
@@ -109,20 +113,22 @@ export function createCutout(root: string, productId: string, requestId: string,
   return promise;
 }
 
-let nextProviderStart = 0;
-async function removeWithPhotoroom(source: Buffer, apiKey: string) {
+export const photoroomTransport = {
+  createDispatcher: () => new Agent({ connectTimeout: 0, headersTimeout: 0, bodyTimeout: 0 })
+};
+export async function removeWithPhotoroom(source: Buffer, apiKey: string) {
   const form = new ProviderFormData();
   // Normalize EXIF orientation once so downstream coordinates are consistent.
-  const image = await sharp(source).autoOrient().png().toBuffer();
+  const image = await preparation.run(() => sharp(source).autoOrient().png().toBuffer());
   if (image.length > 50 * 1024 * 1024) throw new Error("Main image exceeds Photoroom's 50 MB upload limit.");
   form.set("image_file", new Blob([new Uint8Array(image)], { type: "image/png" }), "main.png");
   form.set("format", "png"); form.set("size", "full"); form.set("crop", "false");
-  const agent = new Agent({ connectTimeout: 0, headersTimeout: 0, bodyTimeout: 0 });
+  const agent = photoroomTransport.createDispatcher();
   try {
-    // Default Photoroom limit is 60 starts/minute; overlap slow requests without bursts.
-    const startAt = Math.max(Date.now(), nextProviderStart); nextProviderStart = startAt + 1050;
-    if (startAt > Date.now()) await new Promise(resolve => setTimeout(resolve, startAt - Date.now()));
-    const response = await providerFetch("https://sdk.photoroom.com/v1/segment", { method: "POST", headers: { "x-api-key": apiKey }, body: form, dispatcher: agent });
+    // Use the full documented rolling-minute allowance; no per-image delay
+    // and no connection, header, body, or overall response deadline.
+    await photoroomRateLimit.acquire();
+    const response = await providerFetch("https://sdk.photoroom.com/v1/segment", { method: "POST", headers: { "x-api-key": apiKey }, body: form, dispatcher: agent, redirect: "error" });
     if (!response.ok) {
       await response.body?.cancel();
       throw new Error(`Photoroom returned HTTP ${response.status}. Check your API key and credit balance. No automatic retry was made.`);

@@ -6,6 +6,8 @@ import { createCutout, listCutouts, readCutoutRecords, type MainImageCutout } fr
 import { atomicWriteJson, ensureDir } from "./fsUtils";
 import { conflictError } from "./errors";
 
+import { PHOTOROOM_PARALLEL_REQUESTS } from "./photoroom-limits";
+
 type Operations = { list: typeof listCutouts; create: typeof createCutout; listRecords?: typeof readCutoutRecords };
 /** One persisted batch per catalog. Workers survive tab closure; saved request IDs
  * prevent a process restart from silently resubmitting an ambiguous paid request. */
@@ -103,7 +105,7 @@ export class CutoutBatchQueue {
         await this.process(item); await this.save();
       }
     };
-    await Promise.all(Array.from({ length: 4 }, worker));
+    await Promise.all(Array.from({ length: PHOTOROOM_PARALLEL_REQUESTS }, worker));
     if (this.batch!.status === "running" && !this.batch!.items.some(item => item.status === "queued")) this.batch!.status = "complete";
     await this.save();
   }
