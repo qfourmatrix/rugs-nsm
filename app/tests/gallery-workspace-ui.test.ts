@@ -9,6 +9,7 @@ import * as api from "../src/api";
 
 vi.mock("../src/api", () => ({
   ApiError: class ApiError extends Error {},
+  getCutoutBatch: vi.fn(), startCutoutBatch: vi.fn(), controlCutoutBatch: vi.fn(),
   getPhotoroomStatus: vi.fn(), getMainCutouts: vi.fn(), previewGalleryExport: vi.fn(), imageUrl: vi.fn(() => "/base.png"),
   getGalleryExportReceipts: vi.fn(), getGallerySelection: vi.fn(), getGenerated: vi.fn(),
   thumbnailUrl: vi.fn(() => "/thumb.png"), updateGallerySelection: vi.fn(), updateGalleryReadiness: vi.fn(), preflightGalleryExport: vi.fn(),
@@ -35,6 +36,7 @@ async function render() { await act(async () => root.render(createElement(Galler
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  vi.mocked(api.getCutoutBatch).mockResolvedValue(null);
   vi.mocked(api.getPhotoroomStatus).mockResolvedValue({ configured: false });
   vi.mocked(api.getMainCutouts).mockResolvedValue([]);
   vi.mocked(api.getGalleryExportReceipts).mockResolvedValue({ receipts: [], nextCursor: null });

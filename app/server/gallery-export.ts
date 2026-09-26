@@ -1,6 +1,6 @@
 import { resolveCutout } from "./main-image-cutouts";
 import { DEFAULT_PREPARATION, type ExportPreparation, type MainImageSettings, type ExportPreview } from "../shared/export-preparation";
-import { encodeExportImage, prepareExportImage } from "./export-image-pipeline";
+import { encodeExportImage, encodePreparedExportImage, prepareExportImage } from "./export-image-pipeline";
 import { createWriteStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -783,8 +783,8 @@ export class GalleryExportRegistry {
 }
 
 
-export async function previewGalleryExportImage(productRoot: string, productId: string, assetId: string | undefined, preparation: ExportPreparation): Promise<ExportPreview> {
-  const product = (await scanProducts({ productRoot })).products.find(product => product.id === productId);
+export async function previewGalleryExportImage(productRoot: string, productId: string, assetId: string | undefined, preparation: ExportPreparation, purpose: "layout" | "webp" = "webp"): Promise<ExportPreview> {
+  const product = (await scanProducts({ productRoot, productId })).products.find(product => product.id === productId);
   if (!product) throw notFoundError("UNKNOWN_PRODUCT", "Unknown product.");
   let sourcePath: string;
   if (assetId) {
@@ -804,8 +804,13 @@ export async function previewGalleryExportImage(productRoot: string, productId: 
     const sourceHash = createHash("sha256").update(source).digest("hex");
     const cutout = main?.cutoutId ? await resolveCutout(productRoot, productId, main.cutoutId, sourceHash, false) : undefined;
     const imageSource = cutout ? await fs.readFile(cutout.file) : source;
-    const { data, info } = await encodeExportImage(imageSource, preparation.webp, main);
     const prepared = await prepareExportImage(imageSource, main);
+    if (purpose === "layout") {
+      const { data, info } = await sharp(prepared).resize({ width: 600, height: 600, fit: "inside", withoutEnlargement: true }).png().toBuffer({ resolveWithObject: true });
+      const image = `data:image/png;base64,${data.toString("base64")}`;
+      return { image, reference: "", sourceBytes: source.length, outputBytes: data.length, width: info.width, height: info.height, sourceSha256: sourceHash };
+    }
+    const { data, info } = await encodePreparedExportImage(prepared, preparation.webp);
     const reference = await sharp(prepared).resize({ width: info.width, height: info.height, fit: "inside", withoutEnlargement: true }).png().toBuffer();
     return { image: `data:image/webp;base64,${data.toString("base64")}`, reference: `data:image/png;base64,${reference.toString("base64")}`, sourceBytes: source.length, outputBytes: data.length, width: info.width, height: info.height, sourceSha256: createHash("sha256").update(source).digest("hex") };
   });

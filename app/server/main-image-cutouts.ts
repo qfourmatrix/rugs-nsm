@@ -16,14 +16,15 @@ export interface MainImageCutout {
   status: "processing" | "ready" | "failed"; approved: boolean; createdAt: string;
   uncertainty: number | null; error: string | null; provider: "photoroom";
 }
-const scheduler = new WorkScheduler(2, 8);
+const scheduler = new WorkScheduler(4, 16);
+const productPending = new Map<string, Promise<MainImageCutout>>();
 const pending = new Map<string, Promise<MainImageCutout>>();
 const directory = (root: string) => path.join(root, ".product-shot-queue", "main-image-cutouts");
 const recordPath = (root: string, id: string) => safeChildPath(directory(root), `${z.string().uuid().parse(id)}.json`);
 const imagePath = (root: string, id: string) => safeChildPath(directory(root), `${z.string().uuid().parse(id)}.png`);
 
 async function sourceImage(root: string, productId: string) {
-  const product = (await scanProducts({ productRoot: root })).products.find(product => product.id === productId);
+  const product = (await scanProducts({ productRoot: root, productId })).products.find(product => product.id === productId);
   if (!product?.baseImage) throw notFoundError("MAIN_IMAGE_NOT_FOUND", "Main image not found.");
   const file = safeChildPath(path.join(root, product.id), product.baseImage);
   if (!(await regularFileExists(file))) throw validationError("INVALID_MAIN_IMAGE", "Main image is not a regular file.");
@@ -34,18 +35,21 @@ export async function getCutout(root: string, id: string): Promise<MainImageCuto
   try { return JSON.parse(await fs.readFile(recordPath(root, id), "utf8")); }
   catch { throw notFoundError("CUTOUT_NOT_FOUND", "Saved cutout not found."); }
 }
-export async function listCutouts(root: string, productId: string) {
-  const { hash } = await sourceImage(root, productId);
+export async function readCutoutRecords(root: string) {
   await ensureDir(directory(root));
-  const files = await fs.readdir(directory(root));
-  const results: MainImageCutout[] = [];
-  for (const file of files.filter(file => file.endsWith(".json"))) {
-    try {
-      const record = await getCutout(root, file.slice(0, -5));
-      if (record.productId === productId && record.sourceSha256 === hash) results.push(record);
-    } catch { /* Ignore unrelated corrupt historical records. */ }
+  const files = (await fs.readdir(directory(root))).filter(file => file.endsWith(".json"));
+  const records: MainImageCutout[] = [];
+  for (let index = 0; index < files.length; index += 8) {
+    await Promise.all(files.slice(index, index + 8).map(async file => {
+      try { records.push(await getCutout(root, file.slice(0, -5))); } catch { /* Ignore unrelated corrupt historical records. */ }
+    }));
   }
-  return results.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return records;
+}
+export async function listCutouts(root: string, productId: string, records?: readonly MainImageCutout[]) {
+  const { hash } = await sourceImage(root, productId);
+  return (records ?? await readCutoutRecords(root)).filter(record => record.productId === productId && record.sourceSha256 === hash)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 export async function resolveCutout(root: string, productId: string, id: string, sourceHash: string, requireApproved: boolean) {
   const record = await getCutout(root, id);
@@ -73,6 +77,9 @@ export function createCutout(root: string, productId: string, requestId: string,
     if (record.productId !== productId) throw conflictError("CUTOUT_REQUEST_REUSED", "Request belongs to a different rug.");
     return record;
   });
+  const productKey = `${root}:${productId}`;
+  const productAttempt = productPending.get(productKey);
+  if (productAttempt) return Promise.reject(conflictError("CUTOUT_ALREADY_RUNNING", "This image already has a background-removal request in progress."));
   const promise = scheduler.run(async () => {
     await ensureDir(directory(root));
     try {
@@ -97,10 +104,12 @@ export function createCutout(root: string, productId: string, requestId: string,
     return record;
   });
   pending.set(key, promise);
-  void promise.finally(() => pending.delete(key)).catch(() => undefined);
+  productPending.set(productKey, promise);
+  void promise.finally(() => { pending.delete(key); productPending.delete(productKey); }).catch(() => undefined);
   return promise;
 }
 
+let nextProviderStart = 0;
 async function removeWithPhotoroom(source: Buffer, apiKey: string) {
   const form = new ProviderFormData();
   // Normalize EXIF orientation once so downstream coordinates are consistent.
@@ -110,6 +119,9 @@ async function removeWithPhotoroom(source: Buffer, apiKey: string) {
   form.set("format", "png"); form.set("size", "full"); form.set("crop", "false");
   const agent = new Agent({ connectTimeout: 0, headersTimeout: 0, bodyTimeout: 0 });
   try {
+    // Default Photoroom limit is 60 starts/minute; overlap slow requests without bursts.
+    const startAt = Math.max(Date.now(), nextProviderStart); nextProviderStart = startAt + 1050;
+    if (startAt > Date.now()) await new Promise(resolve => setTimeout(resolve, startAt - Date.now()));
     const response = await providerFetch("https://sdk.photoroom.com/v1/segment", { method: "POST", headers: { "x-api-key": apiKey }, body: form, dispatcher: agent });
     if (!response.ok) {
       await response.body?.cancel();

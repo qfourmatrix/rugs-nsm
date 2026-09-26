@@ -23,7 +23,8 @@ export const ExportPreparationSchema = z.object({
 export const ExportPreviewSchema = z.object({
   productId: z.string().trim().min(1).max(240),
   assetId: z.string().trim().min(1).max(240).optional(),
-  preparation: ExportPreparationSchema
+  preparation: ExportPreparationSchema,
+  purpose: z.enum(["layout", "webp"]).default("webp")
 }).strict();
 export type WebpSettings = z.infer<typeof WebpSettingsSchema>;
 export type MainImageSettings = z.infer<typeof MainImageSettingsSchema>;
