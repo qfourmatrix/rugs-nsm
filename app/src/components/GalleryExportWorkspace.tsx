@@ -107,6 +107,7 @@ export function GalleryExportWorkspace({
   onExportStarted
 }: GalleryExportWorkspaceProps) {
   const initialProduct = currentProduct ?? products[0] ?? null;
+  const sourceEditsRef = useRef(new Map<string, number>());
   const [selectedIds, setSelectedIds] = useState(() => toggleFamilySelection(products.filter((product) => product.familyId === initialProduct?.familyId), new Set()));
   const [search, setSearch] = useState("");
   const [selectionNotice, setSelectionNotice] = useState<{ familyId: string; message: string } | null>(null);
@@ -306,7 +307,7 @@ export function GalleryExportWorkspace({
     previousProductsRef.current = products;
     if (changedIds.length) setSelectedIds((current) => {
       const next = new Set(current);
-      changedIds.forEach((id) => next.delete(id));
+      changedIds.forEach((id) => { if (sourceEditsRef.current.get(id) !== products.find(product => product.id === id)?.galleryRevision) next.delete(id); });
       return next;
     });
   }, [products]);
@@ -521,7 +522,7 @@ export function GalleryExportWorkspace({
           </div>
         </header>
 
-        {preparing ? <ExportPreparation products={products.filter(product => selectedIds.has(product.id))} value={preparation} onChange={setPreparation} onSourceChanged={async id => { galleryChanged(await getGallerySelection(id), false); onGalleryChanged?.(); }} onBack={() => setPreparing(false)} onContinue={format => { setPreparing(false); void exportSelected(format); }} /> : <>
+        {preparing ? <ExportPreparation products={products.filter(product => selectedIds.has(product.id))} value={preparation} onChange={setPreparation} onSourceChanged={async id => { const next = await getGallerySelection(id); sourceEditsRef.current.set(id, next.revision); galleryChanged(next, false); onGalleryChanged?.(); }} onBack={() => setPreparing(false)} onContinue={format => { setPreparing(false); void exportSelected(format); }} /> : <>
         <div className="galleryExportBody">
           <aside className="galleryFamilyPanel">
             <div className="galleryPanelHeading">

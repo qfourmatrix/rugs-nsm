@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { RotateCcw, Undo2, X } from "lucide-react";
-import { applyTopDown, cutoutPreviewUrl, generateTopDown, getJobs, getMainCutouts, getTopDown, imageUrl, restoreCutout, topDownOriginalUrl, type MainCutout } from "../api";
+import { downloadMainOriginalUrl, replaceMainImage, applyTopDown, cutoutPreviewUrl, generateTopDown, getJobs, getMainCutouts, getTopDown, imageUrl, restoreCutout, topDownOriginalUrl, type MainCutout } from "../api";
 import { TOP_DOWN_SHOT_ID, type RestorePoint, type TopDownState } from "../../shared/main-image-tools";
 import { getErrorMessage } from "../utils";
 
-export function MainImageTools({productId,baseImage,cutoutId,onCutout,onBaseChanged}:{productId:string;baseImage:string;cutoutId?:string;onCutout:(cutout:MainCutout)=>void;onBaseChanged:(hash:string)=>Promise<void>}) {
+export function MainImageTools({productId,baseImage,cutoutId,onCutout,onBaseChanged}:{productId:string;baseImage:string;cutoutId?:string;onCutout:(cutout:MainCutout)=>void;onBaseChanged:(hash:string,cutout?:MainCutout)=>Promise<void>}) {
+  const fileInput=useRef<HTMLInputElement>(null);
+  const [replacement,setReplacement]=useState<{file:File;url:string;hash:string}|null>(null);
+  useEffect(()=>()=>{if(replacement)URL.revokeObjectURL(replacement.url);},[replacement]);
   const [mode,setMode]=useState<"lasso"|"topdown"|null>(null);
   const [points,setPoints]=useState<RestorePoint[]>([]);
   const [cursor,setCursor]=useState({x:.5,y:.5});
@@ -55,6 +58,21 @@ export function MainImageTools({productId,baseImage,cutoutId,onCutout,onBaseChan
   const candidate=state?.candidates[0];
   const addPoint=(point:RestorePoint)=>{if(!busy&&points.length<128)setPoints(previous=>[...previous,point]);};
   return <section className="mainImageTools" aria-label="Repair main image">
+    <div className="exportPrepActions">
+      <a className="gallerySecondaryButton" href={downloadMainOriginalUrl(productId)} download>Download original</a>
+      <button type="button" disabled={busy} onClick={()=>fileInput.current?.click()}>Replace image</button>
+      <button type="button" disabled={busy} onClick={()=>void run(async()=>{const current=await getTopDown(productId);if(!current.canRestore){setNotice("The original is already in use.");return;}const result=await applyTopDown(productId,current.sourceSha256);await onBaseChanged(result.sourceSha256);setReplacement(null);setState(await getTopDown(productId));setNotice("Original main image restored.");})}>Restore original image</button>
+      <input ref={fileInput} type="file" hidden accept="image/png,image/jpeg,image/webp" aria-label="Choose retouched main image" onChange={event=>{const file=event.target.files?.[0];event.target.value="";if(!file)return;void run(async()=>{if(file.size>40*1024*1024)throw new Error("Choose an image under 40 MB.");const current=await getTopDown(productId);setReplacement({file,url:URL.createObjectURL(file),hash:current.sourceSha256});});}}/>
+    </div>
+    {replacement&&<div className="mainImageReplacement">
+      <p>{replacement.file.name} · Review your retouched image, then replace. PNG transparency is preserved.</p>
+      <img src={replacement.url} alt="Retouched image to import" style={{maxWidth:"100%",maxHeight:360,objectFit:"contain"}}/>
+      <div className="exportPrepActions"><button type="button" className="galleryPrimaryButton" disabled={busy} onClick={()=>void run(async()=>{
+        const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]);reader.onerror=()=>reject(new Error("Could not read this image. Choose it again."));reader.readAsDataURL(replacement.file);});
+        const result=await replaceMainImage(productId,replacement.hash,data);
+        await onBaseChanged(result.sourceSha256,result.cutout);setReplacement(null);setMode(null);setState(null);setNotice("Image replaced. Review and approve it before export.");
+      })}>{busy?"Replacing…":"Use this image"}</button><button type="button" disabled={busy} onClick={()=>setReplacement(null)}>Cancel</button></div>
+    </div>}
     <div className="exportPrepActions"><button type="button" disabled={!cutoutId||busy} aria-pressed={mode==="lasso"} onClick={()=>setMode(mode==="lasso"?null:"lasso")}>Restore with lasso</button><button type="button" aria-pressed={mode==="topdown"} onClick={()=>setMode(mode==="topdown"?null:"topdown")}>Make top-down</button></div>
     {!cutoutId&&<p>Lasso restoration becomes available after background removal.</p>}
     {mode==="lasso"&&cutoutId&&<div>

@@ -6,7 +6,7 @@ import { ExportPreparation, initialExportPreparation } from "../src/components/E
 import { DEFAULT_MAIN_IMAGE, DEFAULT_PREPARATION, type ExportPreparation as Preparation } from "../shared/export-preparation";
 import type { ProductSummary } from "../shared/types";
 import * as api from "../src/api";
-vi.mock("../src/api", () => ({ ApiError: class extends Error {}, getCutoutBatch:vi.fn(), startCutoutBatch:vi.fn(), controlCutoutBatch:vi.fn(), getPhotoroomStatus:vi.fn(), getMainCutouts:vi.fn(), getGallerySelection:vi.fn(), getGenerated:vi.fn(), previewGalleryExport:vi.fn(), approveMainCutout:vi.fn(), removeMainBackground:vi.fn(), thumbnailUrl:vi.fn(()=>"/thumb.png"), imageUrl:vi.fn(()=>"/base.png") }));
+vi.mock("../src/api", () => ({ ApiError: class extends Error {}, downloadMainOriginalUrl:()=>"/download", getCutoutBatch:vi.fn(), startCutoutBatch:vi.fn(), controlCutoutBatch:vi.fn(), getPhotoroomStatus:vi.fn(), getMainCutouts:vi.fn(), getGallerySelection:vi.fn(), getGenerated:vi.fn(), previewGalleryExport:vi.fn(), approveMainCutout:vi.fn(), removeMainBackground:vi.fn(), thumbnailUrl:vi.fn(()=>"/thumb.png"), imageUrl:vi.fn(()=>"/base.png") }));
 (globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
 let root:Root,container:HTMLDivElement,latest:Preparation;
 const download=vi.fn();
