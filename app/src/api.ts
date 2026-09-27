@@ -525,6 +525,7 @@ export async function getShapeVariants(): Promise<ShapeVariantsOverview> {
 }
 
 export async function prepareShapeVariants(payload: {
+  shapeVersion?:number;
   sourceProductIds: string[];
   shapes: ShapeVariantShape[];
   strategy: ShapeVariantStrategy;
@@ -616,3 +617,5 @@ export async function restoreCutout(id:string,points:import("../shared/main-imag
 
 export const downloadMainOriginalUrl=(productId:string)=>productPath(productId,"/main-image/download");
 export const replaceMainImage=(productId:string,expectedHash:string,data:string)=>request<{sourceSha256:string;cutout?:MainCutout}>(productPath(productId,"/main-image/replace"),{method:"POST",body:JSON.stringify({expectedHash,data})});
+
+export const useShapeVersionForExport=(id:string)=>request(productPath(id,"/export-version"),{method:"POST",body:"{}"});

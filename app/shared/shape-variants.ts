@@ -121,3 +121,10 @@ export function buildShapeVariantPrompt({
     2
   );
 }
+
+export function shapeVersionProductId(sourceId:string,shape:ShapeVariantShape,version=1) {
+  return `${sourceId}--${shape}${version>1?`--v${version}`:""}`;
+}
+export function shapeVersionRecordId(sourceId:string,shape:ShapeVariantShape,version=1) {
+  return `${sourceId}::${shape}${version>1?`::v${version}`:""}`;
+}

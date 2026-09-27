@@ -1,3 +1,5 @@
+import { shapeVersionProductId } from "../shared/shape-variants";
+import { readExportVersions } from "./shape-export-versions";
 import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { SUPPORTED_EXTENSIONS } from "../shared/constants";
@@ -41,6 +43,7 @@ export async function scanProducts({ productRoot, productId }: { productRoot: st
   await ensureProductRoot({ productRoot });
   // Image and selected-product requests must never enumerate unrelated products.
   if (productId !== undefined) assertSafeBasename(productId);
+  const exportVersions=await readExportVersions(productRoot);
   const entries = productId === undefined ? await readdir(productRoot, { withFileTypes: true }) :
     await lstat(path.join(productRoot, productId)).then(info => [{ name: productId, isDirectory: () => info.isDirectory() && !info.isSymbolicLink() }]).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
@@ -87,7 +90,7 @@ export async function scanProducts({ productRoot, productId }: { productRoot: st
         const metadataInfo = await lstat(metadataPath);
         if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink()) throw new Error("variant.json must be a regular file.");
         variantMetadata = ShapeVariantMetadataSchema.parse(JSON.parse(await readFile(metadataPath, "utf8")));
-        if (entry.name !== `${variantMetadata.sourceProductId}--${variantMetadata.shape}`) {
+        if (entry.name !== shapeVersionProductId(variantMetadata.sourceProductId,variantMetadata.shape,variantMetadata.shapeVersion)) {
           throw new Error(`Variant folder must be named ${variantMetadata.sourceProductId}--${variantMetadata.shape}.`);
         }
       } catch (error) {
@@ -106,6 +109,8 @@ export async function scanProducts({ productRoot, productId }: { productRoot: st
       id: entry.name,
       name: entry.name,
       shape: variantMetadata?.shape ?? "area",
+      shapeVersion:variantMetadata?.shapeVersion??1,
+      exportVersionSelected:!variantMetadata || (exportVersions[`${variantMetadata.sourceProductId}::${variantMetadata.shape}`]??shapeVersionProductId(variantMetadata.sourceProductId,variantMetadata.shape))===entry.name,
       familyId: variantMetadata?.familyId ?? entry.name,
       sourceProductId: variantMetadata?.sourceProductId ?? entry.name,
       createdAt: creationTimestamp(linkInfo),

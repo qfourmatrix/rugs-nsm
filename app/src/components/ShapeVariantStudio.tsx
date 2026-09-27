@@ -1,3 +1,5 @@
+import {shapeVersionRecordId} from "../../shared/shape-variants";
+import {useShapeVersionForExport} from "../api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -57,6 +59,7 @@ const STRATEGIES: Array<{ id: ShapeVariantStrategy; label: string }> = [
 ];
 
 interface WorkshopTarget {
+  shapeVersion?:number;
   sourceProductId: string;
   shape: ShapeVariantShape;
 }
@@ -117,7 +120,7 @@ export function ShapeVariantStudio({
   );
 
   const openShape = (shape: ShapeVariantShape) => {
-    const approved = familyProducts.find((product) => product.shape === shape);
+    const approved = familyProducts.find((product) => product.shape === shape && product.exportVersionSelected!==false) ?? familyProducts.find((product)=>product.shape===shape);
     if (approved) {
       onSelectProduct(approved.id);
       return;
@@ -143,7 +146,7 @@ export function ShapeVariantStudio({
             onClick={() => onSelectProduct(sourceProduct.id)}
           />
           {(["runner", "round"] as const).map((shape) => {
-            const product = familyProducts.find((candidate) => candidate.shape === shape);
+            const product = familyProducts.find((candidate) => candidate.shape === shape && candidate.exportVersionSelected!==false) ?? familyProducts.find(candidate=>candidate.shape===shape);
             const record = familyRecords.find((candidate) => candidate.shape === shape);
             return (
               <ShapeButton
@@ -158,6 +161,14 @@ export function ShapeVariantStudio({
             );
           })}
         </div>
+        {selectedProduct && selectedProduct.shape!=="area" && <div className="shapeVersionControls">
+          <label>Version <select aria-label="Shape version" value={selectedProduct.shapeVersion??1} disabled={loading} onChange={event=>{
+            const version=Number(event.target.value);const product=familyProducts.find(p=>p.shape===selectedProduct.shape&&(p.shapeVersion??1)===version);
+            if(product){if(product.id!==selectedProduct.id)onSelectProduct(product.id);}else setWorkshop({sourceProductId:sourceProduct.id,shape:selectedProduct.shape as ShapeVariantShape,shapeVersion:version});
+          }}>{[...new Set([...familyProducts.filter(p=>p.shape===selectedProduct.shape).map(p=>p.shapeVersion??1),...familyRecords.filter(r=>r.shape===selectedProduct.shape).map(r=>r.shapeVersion??1)])].sort((a,b)=>a-b).map(version=><option key={version} value={version}>V{version}{familyProducts.some(p=>p.shape===selectedProduct.shape&&(p.shapeVersion??1)===version)?"":" · base in progress"}</option>)}</select></label>
+          <button type="button" disabled={loading} onClick={()=>{const version=Math.max(1,...familyProducts.filter(p=>p.shape===selectedProduct.shape).map(p=>p.shapeVersion??1),...familyRecords.filter(r=>r.shape===selectedProduct.shape).map(r=>r.shapeVersion??1))+1;setWorkshop({sourceProductId:sourceProduct.id,shape:selectedProduct.shape as ShapeVariantShape,shapeVersion:version});}}>New version</button>
+          <button type="button" disabled={loading||selectedProduct.exportVersionSelected!==false} onClick={()=>void useShapeVersionForExport(selectedProduct.id).then(()=>onCatalogChanged()).catch(reason=>setError(getErrorMessage(reason)))}>{selectedProduct.exportVersionSelected!==false?"Used for export":"Use for export"}</button>
+        </div>}
         <button className="shapeCampaignButton" type="button" onClick={() => setCampaignOpen(true)} disabled={loading}>
           <Layers3 size={16} aria-hidden="true" />
           <span>Shape campaign</span>
@@ -168,10 +179,10 @@ export function ShapeVariantStudio({
 
       {workshop ? (
         <ShapeWorkshop
-          key={`${workshop.sourceProductId}::${workshop.shape}`}
+          key={shapeVersionRecordId(workshop.sourceProductId,workshop.shape,workshop.shapeVersion)}
           target={workshop}
           source={products.find((product) => product.id === workshop.sourceProductId) ?? sourceProduct}
-          record={overview.records.find((candidate) => candidate.id === `${workshop.sourceProductId}::${workshop.shape}`) ?? null}
+          record={overview.records.find((candidate) => candidate.id === shapeVersionRecordId(workshop.sourceProductId,workshop.shape,workshop.shapeVersion)) ?? null}
           onClose={() => setWorkshop(null)}
           onChanged={async () => {
             await refreshOverview();
@@ -188,7 +199,7 @@ export function ShapeVariantStudio({
           onClose={() => setCampaignOpen(false)}
           onOpenReview={(record) => {
             setCampaignOpen(false);
-            setWorkshop({ sourceProductId: record.sourceProductId, shape: record.shape });
+            setWorkshop({ sourceProductId: record.sourceProductId, shape: record.shape, shapeVersion:record.shapeVersion });
           }}
           onChanged={async () => {
             await refreshOverview();
@@ -257,7 +268,7 @@ function ShapeWorkshop({
     if (detailInFlight.current) return;
     detailInFlight.current = true;
     try {
-      const detail = await getShapeVariant(`${target.sourceProductId}::${target.shape}`);
+      const detail = await getShapeVariant(shapeVersionRecordId(target.sourceProductId,target.shape,target.shapeVersion));
       setLiveRecord(detail.variant);
       setCandidates(detail.candidates.filter((asset) => asset.status !== "failed" && Boolean(asset.output?.file)));
       setSelectedAssetId((current) => current && detail.variant.candidateAssetIds.includes(current) ? current : detail.variant.candidateAssetIds[0] ?? null);
@@ -266,7 +277,7 @@ function ShapeWorkshop({
     } finally {
       detailInFlight.current = false;
     }
-  }, [record, target.shape, target.sourceProductId]);
+  }, [record, target.shape, target.sourceProductId,target.shapeVersion]);
 
   useEffect(() => {
     if (record) void loadDetail();
@@ -296,6 +307,7 @@ function ShapeWorkshop({
     if (!window.confirm(`Generate ${callCount} ${target.shape} design candidate${callCount === 1 ? "" : "s"}?\n\nThis request allows up to ${callCount} billable provider call${callCount === 1 ? "" : "s"}; failed validation makes no call. No product is published until you approve one.`)) return;
     const prepared = await prepareShapeVariants({
       sourceProductIds: [source.id],
+      shapeVersion:target.shapeVersion,
       shapes: [target.shape],
       strategy,
       runnerRatio,
@@ -348,7 +360,7 @@ function ShapeWorkshop({
         <header className="shapeModalHeader">
           <div>
             <span className="shapeModalEyebrow">Design approval · {source.name}</span>
-            <h2 id="shape-workshop-title">Make {target.shape === "runner" ? "Runner" : "Round"}</h2>
+            {(target.shapeVersion??1)>1&&<p>Fresh base from the Area image. Your earlier versions stay intact.</p>}<h2 id="shape-workshop-title">Make {target.shape === "runner" ? "Runner" : "Round"} · V{target.shapeVersion??1}</h2>
             <p>Rebuild the same design for a new manufactured shape. Nothing enters the catalog until approval.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close shape workshop"><X size={19} /></button>
@@ -402,7 +414,7 @@ function ShapeWorkshop({
             <div className="shapeActions">
               {approvalProductId ? (
                 <>
-                  <button className="controlButton" type="button" onClick={() => onSelectProduct(approvalProductId)}>Open approved product</button>
+                  <button className="controlButton" type="button" onClick={() => {onSelectProduct(approvalProductId);onClose();}}>Open approved product</button>
                   <button className="controlButton primary" type="button" disabled={Boolean(busy)} onClick={handleGenerateShots}>{busy === "shots" ? "Queuing…" : "Generate missing product shots"}</button>
                 </>
               ) : (

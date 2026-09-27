@@ -225,6 +225,7 @@ export const AssetRecordSchema = z
             familyId: z.string(),
             sourceProductId: z.string(),
             variantProductId: z.string(),
+            shapeVersion:z.number().int().min(1).max(999).optional(),
             shape: ShapeVariantShapeSchema,
             strategy: ShapeVariantStrategySchema,
             runnerRatio: z.number().min(2).max(6).nullable(),

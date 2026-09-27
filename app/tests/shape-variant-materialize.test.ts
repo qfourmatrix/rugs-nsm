@@ -1,3 +1,4 @@
+import {selectExportVersion} from "../server/shape-export-versions";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
@@ -23,7 +24,9 @@ describe("atomic shape-variant approval", () => {
 
   afterEach(async () => cleanupTempWorkspace(workspace));
 
-  it("materializes an approved sibling without changing the Area source", async () => {
+  it.each([1,2])("materializes independent shape version %s without changing the Area or V1", async (version) => {
+    const targetId=version===1?"rug-1--runner":"rug-1--runner--v2";
+    const recordId=version===1?"rug-1::runner":"rug-1::runner::v2";
     const sourceImage = await sharp({
       create: { width: 768, height: 768, channels: 3, background: { r: 180, g: 120, b: 70 } }
     }).png().toBuffer();
@@ -34,10 +37,11 @@ describe("atomic shape-variant approval", () => {
 
     const now = "2026-08-05T00:00:00.000Z";
     const campaignRecord: ShapeVariantRecord = {
-      id: "rug-1::runner",
+      id: recordId,
+      shapeVersion:version,
       familyId: "rug-1",
       sourceProductId: "rug-1",
-      variantProductId: "rug-1--runner",
+      variantProductId: targetId,
       shape: "runner",
       status: "needs_review",
       strategy: "auto",
@@ -78,9 +82,10 @@ describe("atomic shape-variant approval", () => {
           },
           references: [],
           shapeVariant: {
+            shapeVersion:version,
             familyId: "rug-1",
             sourceProductId: "rug-1",
-            variantProductId: "rug-1--runner",
+            variantProductId: targetId,
             shape: "runner",
             strategy: "auto",
             runnerRatio: 3.33,
@@ -93,19 +98,27 @@ describe("atomic shape-variant approval", () => {
       })
     });
 
+    if(version===2){await fs.mkdir(path.join(productRoot,"rug-1--runner"));await fs.writeFile(path.join(productRoot,"rug-1--runner","base.png"),sourceImage);await fs.writeFile(path.join(productRoot,"rug-1--runner","keep.txt"),"V1 gallery and edits");}
     const approved = await materializeShapeVariant({ productRoot, record: campaignRecord, assetId: "runner-candidate" });
     expect(approved.status).toBe("approved");
     expect(await sha256File(sourcePath)).toBe(sourceHash);
-    expect(await readJson(path.join(productRoot, "rug-1--runner", "variant.json"))).toMatchObject({
+    expect(await readJson(path.join(productRoot, targetId, "variant.json"))).toMatchObject({
       sourceProductId: "rug-1",
       shape: "runner",
       approvedAssetId: "runner-candidate",
       sourceBaseSha256: sourceHash
     });
-    const variant = productList(await scanProducts({ productRoot })).find((product) => product.id === "rug-1--runner");
+    const variant = productList(await scanProducts({ productRoot })).find((product) => product.id === targetId);
     expect(variant).toMatchObject({ status: "ready", shape: "runner", familyId: "rug-1" });
-    expect((await getShapeVariantRecord(productRoot, "rug-1::runner")).approvedAssetId).toBe("runner-candidate");
+    expect((await getShapeVariantRecord(productRoot, recordId)).approvedAssetId).toBe("runner-candidate");
 
+    if(version===2){
+      expect(await fs.readFile(path.join(productRoot,"rug-1--runner","keep.txt"),"utf8")).toBe("V1 gallery and edits");
+      expect(await sha256File(path.join(productRoot,"rug-1--runner","base.png"))).toBe(sourceHash);
+      expect(variant?.exportVersionSelected).toBe(false);
+      await selectExportVersion(productRoot,"rug-1::runner",targetId);
+      expect((await scanProducts({productRoot,productId:targetId})).products[0].exportVersionSelected).toBe(true);
+    }
     await expect(materializeShapeVariant({ productRoot, record: approved, assetId: "runner-candidate" })).resolves.toMatchObject({ status: "approved" });
   });
 });

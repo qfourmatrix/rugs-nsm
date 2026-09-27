@@ -1,3 +1,5 @@
+import { shapeVersionProductId, shapeVersionRecordId } from "../shared/shape-variants";
+import { selectExportVersion } from "./shape-export-versions";
 import { preserveMainOriginal, getTopDownState, topDownOriginalPath, changeMainImage, cutoutImagePath, restoreCutoutPolygon } from "./main-image-tools";
 import { TOP_DOWN_SHOT_ID, TOP_DOWN_PROMPT } from "../shared/main-image-tools";
 import { CutoutBatchQueue } from "./cutout-batch";
@@ -456,6 +458,7 @@ function shapeDerivation(record: ShapeVariantRecord, runId: string): ShapeVarian
     familyId: record.familyId,
     sourceProductId: record.sourceProductId,
     variantProductId: record.variantProductId,
+    ...(record.shapeVersion?{shapeVersion:record.shapeVersion}:{}),
     shape: record.shape,
     strategy: record.strategy,
     runnerRatio: record.runnerRatio,
@@ -956,7 +959,7 @@ async function runGeneration(item: QueuedGeneration) {
 
 async function noteShapeVariantStarted(item: QueuedGeneration) {
   if (!item.shapeVariant) return;
-  await updateShapeVariantRecord(config.productRoot, shapeVariantRecordId(item.shapeVariant.sourceProductId, item.shapeVariant.shape), (record) => {
+  await updateShapeVariantRecord(config.productRoot, shapeVersionRecordId(item.shapeVariant.sourceProductId, item.shapeVariant.shape,item.shapeVariant.shapeVersion), (record) => {
     if (record.activeRunId === item.shapeVariant?.runId && record.status !== "approved") {
       record.status = "generating";
     }
@@ -970,7 +973,7 @@ async function noteShapeVariantCompletion(
   error?: unknown
 ) {
   if (!item.shapeVariant) return;
-  await updateShapeVariantRecord(config.productRoot, shapeVariantRecordId(item.shapeVariant.sourceProductId, item.shapeVariant.shape), (record) => {
+  await updateShapeVariantRecord(config.productRoot, shapeVersionRecordId(item.shapeVariant.sourceProductId, item.shapeVariant.shape,item.shapeVariant.shapeVersion), (record) => {
     if (record.activeRunId !== item.shapeVariant?.runId || record.status === "approved") return;
     if (outcome === "succeeded" && assetId && !record.candidateAssetIds.includes(assetId)) {
       record.candidateAssetIds.push(assetId);
@@ -1240,6 +1243,12 @@ app.get(
   })
 );
 
+app.post("/api/products/:productId/export-version",asyncRoute(async(req,res)=>{
+  const product=(await scanProducts({productRoot:config.productRoot,productId:req.params.productId as string})).products[0];
+  if(!product||product.shape==="area"||product.status!=="ready")throw validationError("INVALID_VERSION","Choose a ready Runner or Round version.");
+  await selectExportVersion(config.productRoot,`${product.sourceProductId}::${product.shape}`,product.id);
+  res.json({productId:product.id});
+}));
 app.post(
   "/api/shape-variants/prepare",
   asyncRoute(async (req, res) => {
@@ -1261,7 +1270,7 @@ app.post(
       }
       const sourceBaseSha256 = await sha256File(path.join(config.productRoot, source.id, source.baseImage));
       for (const shape of [...new Set(parsed.shapes)]) {
-        const variantProductId = `${source.id}--${shape}`;
+        const variantProductId = shapeVersionProductId(source.id,shape,parsed.shapeVersion);
         const target = byId.get(variantProductId);
         if (target && target.shape !== shape) {
           throw conflictError("VARIANT_PRODUCT_EXISTS", `Product folder ${variantProductId} already exists and is not a valid ${shape} variant.`);
@@ -1289,7 +1298,7 @@ app.post(
       const now = new Date().toISOString();
       const result: ShapeVariantRecord[] = [];
       for (const input of preparedInputs) {
-        const id = shapeVariantRecordId(input.source.id, input.shape);
+        const id = shapeVersionRecordId(input.source.id, input.shape,parsed.shapeVersion);
         const existing = campaign.variants.find((record) => record.id === id);
         if (existing?.status === "approved" || existing?.status === "queued" || existing?.status === "generating") {
           result.push(structuredClone(existing));
@@ -1299,7 +1308,8 @@ app.post(
           id,
           familyId: input.source.familyId,
           sourceProductId: input.source.id,
-          variantProductId: `${input.source.id}--${input.shape}`,
+          variantProductId: shapeVersionProductId(input.source.id,input.shape,parsed.shapeVersion),
+          ...(parsed.shapeVersion?{shapeVersion:parsed.shapeVersion}:{}),
           shape: input.shape,
           status: "planned",
           strategy: parsed.strategy,
@@ -1311,7 +1321,7 @@ app.post(
           sourceBaseSha256: input.sourceBaseSha256,
           promptVersion: promptVersionForShape(input.shape),
           prompt: input.prompt,
-          candidateAssetIds: [],
+          candidateAssetIds: existing?.sourceBaseSha256===input.sourceBaseSha256 ? existing.candidateAssetIds : [],
           approvedAssetId: null,
           activeRunId: null,
           requestedCandidateCount: 0,
