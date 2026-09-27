@@ -131,3 +131,16 @@
   .exportPrepFamilyNav label { flex: 0 0 100%; max-width: none; }
   .exportPrepFamilyNav > button { margin-left: auto; }
 }
+
+.mainImageTools { margin: 16px 0; padding: 16px 0; border-block: 1px solid var(--border); }
+.rugLasso { position: relative; width: min(100%, 720px); margin-top: 12px; background: repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 0 / 20px 20px; }
+.rugLasso img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.rugLasso svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: manipulation; }
+.rugLasso svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.rugLassoCursor { visibility: hidden; }
+.rugLasso svg:focus-visible .rugLassoCursor { visibility: visible; }
+.rugTopDownCompare { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin: 12px 0; }
+.rugTopDownCompare figure { min-width: 0; margin: 0; }
+.rugTopDownCompare img { width: 100%; aspect-ratio: 1; object-fit: contain; }
+.rugTopDownCompare figcaption { margin-bottom: 6px; font-size: 12px; }
+.mainImageTools button { min-height: 44px; }

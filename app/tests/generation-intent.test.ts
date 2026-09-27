@@ -62,7 +62,7 @@ it("blocks changed input or expired uncertain submissions instead of generating 
   expect(() => prepareGenerationIntent(localStorage, "route", "original", 86400001)).toThrow("safe retry window");
 });
 it("covers every generation family but excludes review and preparation", () => {
-  for (const route of ["generate", "generate-missing", "retry-failed", "refine", "generated/a/retry"]) expect(isGenerationRoute(`/api/products/rug/${route}`)).toBe(true);
+  for (const route of ["top-down", "generate", "generate-missing", "retry-failed", "refine", "generated/a/retry"]) expect(isGenerationRoute(`/api/products/rug/${route}`)).toBe(true);
   expect(isGenerationRoute("/api/shape-variants/generate")).toBe(true);
   expect(isGenerationRoute("/api/shape-variants/generate-shots")).toBe(true);
   expect(isGenerationRoute("/api/shape-variants/prepare")).toBe(false);

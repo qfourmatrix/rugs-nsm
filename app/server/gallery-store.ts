@@ -8,7 +8,7 @@ import { conflictError, validationError } from "./errors";
 import { atomicWriteJson, pathExists, readJsonFile, regularFileExists, safeChildPath, sha256File, SUPPORTED_IMAGE_EXTENSIONS } from "./fsUtils";
 
 export const GALLERY_SELECTION_FILENAME = "gallery-selection.json";
-export const UTILITY_SHOT_IDS = new Set(["refine_base", "shape_runner_base", "shape_round_base"]);
+export const UTILITY_SHOT_IDS = new Set(["top_down_base", "refine_base", "shape_runner_base", "shape_round_base"]);
 const fields = {
   productId: z.string().min(1), assetIds: z.array(z.string().min(1)).max(100),
   initializedAt: z.string().datetime(), updatedAt: z.string().datetime()

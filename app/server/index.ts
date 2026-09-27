@@ -1,3 +1,5 @@
+import { preserveMainOriginal, getTopDownState, topDownOriginalPath, changeMainImage, cutoutImagePath, restoreCutoutPolygon } from "./main-image-tools";
+import { TOP_DOWN_SHOT_ID, TOP_DOWN_PROMPT } from "../shared/main-image-tools";
 import { CutoutBatchQueue } from "./cutout-batch";
 import { CutoutBatchRequestSchema } from "../shared/cutout-batch";
 import { approveCutout, createCutout, listCutouts, CutoutApprovalSchema, CutoutRequestSchema } from "./main-image-cutouts";
@@ -1618,6 +1620,36 @@ app.patch("/api/gallery-exports/cutout-batch", asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/gallery-exports/photoroom", (_req, res) => res.json({ configured: Boolean(process.env.PHOTOROOM_API_KEY?.trim()) }));
+app.get("/api/products/:productId/top-down", asyncRoute(async(req,res)=>{
+  res.json(await getTopDownState(config.productRoot,req.params.productId as string));
+}));
+app.get("/api/products/:productId/top-down/original", asyncRoute(async(req,res)=>{
+  res.setHeader("Cache-Control","no-store");res.sendFile(await topDownOriginalPath(config.productRoot,req.params.productId as string),{dotfiles:"allow"});
+}));
+app.post("/api/products/:productId/top-down", asyncRoute(async(req,res)=>{
+  const id=req.params.productId as string;await assertReadyProduct(id);
+  z.object({}).strict().parse(req.body??{});
+  const original=await preserveMainOriginal(config.productRoot,id);
+  const generated=await listProductGenerated(id);
+  const shot:Shot={id:TOP_DOWN_SHOT_ID,name:"Make top-down",prompt:TOP_DOWN_PROMPT,defaultAspectRatio:"1:1",defaultImageSize:"4K"};
+  const runId=makeRunId();
+  const jobIds=enqueueBatch({runId,productId:id,shot,prompt:TOP_DOWN_PROMPT,settings:{aspectRatio:"1:1",imageSize:"4K"},referenceImages:[],background:null,labelLogo:null,construction:null,parentAssetId:null,batchSize:1,attemptStart:nextAttemptForShot(generated,TOP_DOWN_SHOT_ID),sourceImage:{path:original.file,file:`preserved-original/${original.filename}`,mimeType:imageMimeType(original.filename)}});
+  res.json({runId,jobIds});
+}));
+app.post("/api/products/:productId/top-down/apply", asyncRoute(async(req,res)=>{
+  const id=req.params.productId as string;
+  const parsed=z.object({expectedHash:z.string().regex(/^[a-f0-9]{64}$/),assetId:z.string().min(1).max(240).optional()}).strict().parse(req.body);
+  const batch=await cutoutBatches.get();
+  if(jobs.all().some(job=>job.productId===id&&["queued","generating"].includes(job.status))||batch?.items.some(item=>item.productId===id&&["queued","processing"].includes(item.status)))throw conflictError("MAIN_IMAGE_BUSY","Let this rug's active generation/background-removal jobs finish before changing its main image.");
+  res.json(await changeMainImage(config.productRoot,id,parsed.expectedHash,parsed.assetId));
+}));
+app.get("/api/gallery-exports/cutouts/:id/image", asyncRoute(async(req,res)=>{
+  res.setHeader("Cache-Control","no-store");res.sendFile(await cutoutImagePath(config.productRoot,req.params.id as string),{dotfiles:"allow"});
+}));
+app.post("/api/gallery-exports/cutouts/:id/restore", asyncRoute(async(req,res)=>{
+  res.json({cutout:await restoreCutoutPolygon(config.productRoot,req.params.id as string,req.body)});
+}));
+
 app.get("/api/products/:productId/main-cutouts", asyncRoute(async (req, res) => {
   res.json({ cutouts: await listCutouts(config.productRoot, req.params.productId as string) });
 }));

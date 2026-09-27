@@ -82,7 +82,7 @@ function isObject(value: unknown): value is JsonObject {
 async function request<T>(path: string, init: RequestInit = {}, unchanged?: T): Promise<T> {
   const generation = init.method === "POST" && isGenerationRoute(path);
   const exportSubmission = init.method === "POST" &&
-    (path === "/api/gallery-exports/preflight" || path === "/api/gallery-exports" || path === "/api/gallery-exports/preview" || path === "/api/gallery-exports/cutouts");
+    (path === "/api/gallery-exports/preflight" || path === "/api/gallery-exports" || path === "/api/gallery-exports/preview" || path === "/api/gallery-exports/cutouts" || /^\/api\/gallery-exports\/cutouts\/[^/]+\/restore$/.test(path) || /^\/api\/products\/[^/]+\/top-down\/apply$/.test(path));
   const intent = generation
     ? prepareGenerationIntent(window.localStorage, path, typeof init.body === "string" ? init.body : "null") : null;
   const timeout = new AbortController();
@@ -581,7 +581,7 @@ export async function previewGalleryExport(productId: string, assetId: string | 
 
 export interface MainCutout {
   id: string; productId: string; sourceSha256: string; outputSha256?: string;
-  status: "processing" | "ready" | "failed"; approved: boolean; createdAt: string;
+  status: "processing" | "ready" | "failed"; approved: boolean; createdAt: string; parentId?: string;
   uncertainty: number | null; error: string | null;
 }
 export const getPhotoroomStatus = () => request<{ configured: boolean }>("/api/gallery-exports/photoroom");
@@ -603,4 +603,13 @@ export async function startCutoutBatch(productIds: string[], requestId: string):
 }
 export async function controlCutoutBatch(action: "pause" | "resume" | "retry"): Promise<import("../shared/cutout-batch").CutoutBatch> {
   return unwrap(await request("/api/gallery-exports/cutout-batch", { method: "PATCH", body: JSON.stringify({ action }) }), ["batch"]);
+}
+
+export const getTopDown = (productId:string) => request<import("../shared/main-image-tools").TopDownState>(productPath(productId,"/top-down"));
+export const generateTopDown = (productId:string) => request<GenerateResponse>(productPath(productId,"/top-down"),{method:"POST",body:JSON.stringify({})});
+export const applyTopDown = (productId:string,expectedHash:string,assetId?:string) => request<{sourceSha256:string}>(productPath(productId,"/top-down/apply"),{method:"POST",body:JSON.stringify({expectedHash,assetId})});
+export const topDownOriginalUrl = (productId:string) => productPath(productId,"/top-down/original");
+export const cutoutPreviewUrl = (id:string) => `/api/gallery-exports/cutouts/${encodeURIComponent(id)}/image`;
+export async function restoreCutout(id:string,points:import("../shared/main-image-tools").RestorePoint[],requestId:string):Promise<MainCutout> {
+  return unwrap(await request(`/api/gallery-exports/cutouts/${encodeURIComponent(id)}/restore`,{method:"POST",body:JSON.stringify({points,requestId})}),["cutout"]);
 }
