@@ -105,7 +105,7 @@ export function ProductTabs({
   const selectFamily = (product: ProductSummary) => {
     const desiredShape = selectedProduct?.shape ?? "area";
     const family = productsByFamily.get(product.familyId) ?? [product];
-    onSelectProduct(family.find((candidate) => candidate.shape === desiredShape)?.id ?? product.id);
+    onSelectProduct(family.find((candidate) => candidate.shape === desiredShape && candidate.exportVersionSelected!==false)?.id ?? product.id);
   };
 
   useEffect(() => {
@@ -463,6 +463,7 @@ export function matchesProductFilter(product: ProductSummary, filter: ProductFil
 }
 
 function matchesFamilyFilter(family: ProductSummary[], filter: ProductFilter) {
+  family=family.filter(product=>product.exportVersionSelected!==false);
   if (filter === "all") return true;
   const statuses = family.map(productStatus);
   const complete = family.length > 0 && family.every(isProductComplete);
@@ -472,6 +473,7 @@ function matchesFamilyFilter(family: ProductSummary[], filter: ProductFilter) {
 }
 
 function familyStatus(family: ProductSummary[]): { label: string; tone: StatusTone } {
+  family=family.filter(product=>product.exportVersionSelected!==false);
   const statuses = family.map(productStatus);
   for (const tone of ["running", "danger", "review", "warning"] as const) {
     const match = statuses.find((status) => status.tone === tone);

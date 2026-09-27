@@ -13,7 +13,7 @@ export function ShapeStatusIcon({ shape, status, label }: { shape: ProductShape;
 export function FamilyShapeStatus({ products, familyName }: { products: ProductSummary[]; familyName?: string }) {
   return <span className="familyShapeStatus" aria-label={familyName ? `${familyName} export readiness` : "Shape export readiness"}>
     {(["area", "runner", "round"] as const).map((shape) => {
-      const product = products.find((candidate) => candidate.shape === shape);
+      const product = products.find((candidate) => candidate.shape === shape && candidate.exportVersionSelected!==false);
       if (product?.readinessError) return <span key={shape} className="familyShapeStatusError" title={`${labels[shape]}: readiness unavailable — ${product.readinessError}`} aria-label={`${labels[shape]}: readiness unavailable`}>?</span>;
       const status: ShapeExportStatus = !product?.baseImage || product.status === "missing_base" ? "missing" : product.exportReady ? "ready" : "not-ready";
       return <ShapeStatusIcon key={shape} shape={shape} status={status} />;

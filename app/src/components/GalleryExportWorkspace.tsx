@@ -99,13 +99,14 @@ export function moveGalleryAsset(assetIds: string[], assetId: string, direction:
 }
 
 export function GalleryExportWorkspace({
-  products,
+  products: allProducts,
   currentProduct,
   onClose,
   onGalleryChanged,
   initialExportId,
   onExportStarted
 }: GalleryExportWorkspaceProps) {
+  const products=useMemo(()=>allProducts.filter(product=>product.exportVersionSelected!==false),[allProducts]);
   const initialProduct = currentProduct ?? products[0] ?? null;
   const sourceEditsRef = useRef(new Map<string, number>());
   const [selectedIds, setSelectedIds] = useState(() => toggleFamilySelection(products.filter((product) => product.familyId === initialProduct?.familyId), new Set()));
@@ -745,7 +746,7 @@ function ShapeGallery({ product, included, disabled, onToggle, onChange, onSavin
   return (
     <section id={`gallery-shape-${product.id}`} ref={sectionRef} tabIndex={-1} className={`galleryShapeSection ${gallery?.assetIds.length === 0 ? "isBaseOnly" : ""}`} aria-label={`${product.shape} gallery`} aria-busy={loading || saving}>
       <div className="galleryShapeHeading">
-        <div><h4>{product.shape}</h4><span className={ready ? "isReady" : "isNotReady"}>{loading ? "Loading review status…" : ready ? "Ready for export" : "Not ready for export"}</span>{gallery ? <small>{gallery.assetIds.length + 1} {gallery.assetIds.length === 0 ? "image" : "images"}</small> : null}</div>
+        <div><h4>{product.shape}{product.shape!=="area"&&` · V${product.shapeVersion??1}`}</h4><span className={ready ? "isReady" : "isNotReady"}>{loading ? "Loading review status…" : ready ? "Ready for export" : "Not ready for export"}</span>{gallery ? <small>{gallery.assetIds.length + 1} {gallery.assetIds.length === 0 ? "image" : "images"}</small> : null}</div>
         <div className="galleryShapeControls"><button type="button" className={`galleryReadinessButton ${ready ? "isReady" : ""}`} aria-label={`Mark ${product.shape} ${ready ? "not ready" : "ready"}`} disabled={locked} onClick={() => void markReadiness()}>{ready ? "Mark not ready" : "Mark ready"}</button><label><input type="checkbox" checked={included} onChange={onToggle} disabled={locked} aria-label={`Include ${product.shape} in export`} /> {included ? "Included" : "Include in export"}</label></div>
       </div>
       {included && !ready && !loading ? <p className="galleryShapeWarning"><AlertTriangle size={13} /> Included, but not marked ready. Files will still be checked.</p> : null}

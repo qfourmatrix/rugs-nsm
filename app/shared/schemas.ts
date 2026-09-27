@@ -257,6 +257,7 @@ export const AssetRecordSchema = z.object({
       prompt: z.string()
     }).nullable().optional(),
     shapeVariant: z.object({
+      shapeVersion:z.number().int().min(1).max(999).optional(),
       familyId: z.string().min(1),
       sourceProductId: z.string().min(1),
       variantProductId: z.string().min(1),
@@ -332,6 +333,7 @@ export const RefineRequestSchema = z
   .strict();
 
 export const ShapeVariantMetadataSchema = z.object({
+  shapeVersion: z.number().int().min(1).max(999).optional(),
   version: z.literal(1),
   familyId: z.string().min(1),
   sourceProductId: z.string().min(1),
@@ -343,6 +345,7 @@ export const ShapeVariantMetadataSchema = z.object({
 }).strict();
 
 export const ShapeVariantRecordSchema = z.object({
+  shapeVersion: z.number().int().min(1).max(999).optional(),
   id: z.string().min(1),
   familyId: z.string().min(1),
   sourceProductId: z.string().min(1),
@@ -375,6 +378,7 @@ export const ShapeVariantCampaignSchema = z.object({
 }).strict();
 
 export const ShapeVariantPrepareRequestSchema = z.object({
+  shapeVersion: z.number().int().min(1).max(999).optional(),
   sourceProductIds: z.array(z.string().min(1)).min(1).max(500),
   shapes: z.array(ShapeVariantShapeSchema).min(1).max(2).default(["runner", "round"]),
   strategy: ShapeVariantStrategySchema.default("auto"),

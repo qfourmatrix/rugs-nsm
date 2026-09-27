@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { ShapeVariantMetadataSchema } from "../shared/schemas";
-import { shotIdForShape } from "../shared/shape-variants";
+import { shapeVersionProductId, shotIdForShape } from "../shared/shape-variants";
 import type { ProductState, ShapeVariantMetadata, ShapeVariantRecord } from "../shared/types";
 import { acceptAsset, generatedDir, getAssetRecord } from "./asset-store";
 import { conflictError, validationError } from "./errors";
@@ -56,7 +56,7 @@ export async function materializeShapeVariant({
 }) {
   assertSafeProductId(record.sourceProductId);
   assertSafeProductId(record.variantProductId);
-  const expectedVariantId = `${record.sourceProductId}--${record.shape}`;
+  const expectedVariantId = shapeVersionProductId(record.sourceProductId,record.shape,record.shapeVersion);
   if (record.variantProductId !== expectedVariantId) {
     throw validationError("INVALID_VARIANT_TARGET", `Variant target must be ${expectedVariantId}.`);
   }
@@ -114,6 +114,7 @@ export async function materializeShapeVariant({
   const now = new Date().toISOString();
   const metadata: ShapeVariantMetadata = {
     version: 1,
+    ...(record.shapeVersion?{shapeVersion:record.shapeVersion}:{}),
     familyId: record.familyId,
     sourceProductId: record.sourceProductId,
     shape: record.shape,

@@ -65,6 +65,7 @@ export interface RefineSettings {
 }
 
 export interface ProductSummary {
+  shapeVersion?: number;
   id: string;
   name: string;
   shape: ProductShape;
@@ -75,6 +76,7 @@ export interface ProductSummary {
   baseImage: string | null;
   referenceImages: string[];
   exportReady?: boolean;
+  exportVersionSelected?: boolean;
   galleryRevision?: number;
   readinessError?: string;
   counts: {
@@ -88,6 +90,7 @@ export interface ProductSummary {
 }
 
 export interface ShapeVariantMetadata {
+  shapeVersion?: number;
   version: 1;
   familyId: string;
   sourceProductId: string;
@@ -99,6 +102,7 @@ export interface ShapeVariantMetadata {
 }
 
 export interface ShapeVariantDerivation {
+  shapeVersion?:number;
   familyId: string;
   sourceProductId: string;
   variantProductId: string;
@@ -111,6 +115,7 @@ export interface ShapeVariantDerivation {
 }
 
 export interface ShapeVariantRecord {
+  shapeVersion?: number;
   id: string;
   familyId: string;
   sourceProductId: string;
@@ -338,6 +343,7 @@ export interface GalleryPreflightShape {
   issues: GalleryPreflightIssue[];
   contentFingerprint?: string;
   exportReady?: boolean;
+  exportVersionSelected?: boolean;
   galleryRevision?: number;
 }
 
@@ -374,6 +380,7 @@ export interface GalleryExportImageReceipt {
 
 export interface GalleryExportShapeReceipt {
   exportReady?: boolean;
+  exportVersionSelected?: boolean;
   galleryRevision?: number;
   productId: string;
   familyId: string;
