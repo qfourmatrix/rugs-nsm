@@ -26,6 +26,17 @@ it("uses durable admission and the shared queue, protects active jobs, retries f
  const url=`http://127.0.0.1:${port}`;
  const until=async(check:()=>Promise<boolean>|boolean)=>{const end=Date.now()+30000;while(Date.now()<end){if(child.exitCode!==null)throw Error(logs);if(await check())return;await new Promise(r=>setTimeout(r,25));}throw Error(`Condition did not settle: ${logs}`);};
  const post=(suffix:string,body:unknown,key?:string)=>fetch(url+`/api/products/rug/${suffix}`,{method:"POST",headers:{"Content-Type":"application/json",...(key?{"Idempotency-Key":key}:{})},body:JSON.stringify(body)});
+ const waitForJob=async(jobId:string)=>until(async()=>{
+  const {jobs}=await(await fetch(url+"/api/jobs?productId=rug")).json();
+  const job=jobs.find((item:any)=>item.jobId===jobId);
+  if(job&&["failed","cancelled","interrupted"].includes(job.status))throw Error(`Top-down job ${jobId}: ${job.status}: ${job.message}`);
+  return job?.status==="succeeded";
+ });
+ const assertApplied=async(body:unknown)=>{
+  const response=await post("top-down/apply",body);
+  const detail=await response.text();
+  expect(response.status,detail).toBe(200);
+ };
  const finish=()=>held.shift()!.end(JSON.stringify({candidates:[{content:{parts:[{inlineData:{mimeType:"image/png",data:generated.toString("base64")}}]}}]}));
  try{
   await until(async()=>{try{return(await fetch(url+"/api/app-info")).ok;}catch{return false;}});
@@ -33,14 +44,17 @@ it("uses durable admission and the shared queue, protects active jobs, retries f
   expect(await(await post("top-down",{},key)).json()).toEqual(result);
   await until(()=>bodies.length===1);
   expect((await post("top-down/apply",{expectedHash:hash(source)})).status).toBe(409);
-  finish();let state:any;
+  finish();
+  // Asset metadata can be visible while saveAsset is still syncing to disk.
+  // Wait for the same terminal queue state that enables Accept in the UI.
+  await waitForJob(result.jobIds[0]);let state:any;
   await until(async()=>{state=await(await fetch(url+"/api/products/rug/top-down")).json();return state.candidates.length===1;});
-  expect((await post("top-down/apply",{expectedHash:hash(source),assetId:state.candidates[0].assetId})).ok).toBe(true);
+  await assertApplied({expectedHash:hash(source),assetId:state.candidates[0].assetId});
   expect(hash(await readFile(path.join(root,"rug","base.png")))).not.toBe(hash(source));
-  expect((await post("top-down",{},randomUUID())).ok).toBe(true);await until(()=>bodies.length===2);
+  const retry=await post("top-down",{},randomUUID());expect(retry.ok).toBe(true);const retryResult=await retry.json();await until(()=>bodies.length===2);
   for(const body of bodies){const images=body.contents[0].parts.filter((p:any)=>p.inline_data);expect(images).toHaveLength(1);expect(hash(Buffer.from(images[0].inline_data.data,"base64"))).toBe(hash(source));}
-  finish();await until(async()=>{state=await(await fetch(url+"/api/products/rug/top-down")).json();return state.candidates.length===2;});
-  expect((await post("top-down/apply",{expectedHash:state.sourceSha256})).ok).toBe(true);
+  finish();await waitForJob(retryResult.jobIds[0]);await until(async()=>{state=await(await fetch(url+"/api/products/rug/top-down")).json();return state.candidates.length===2;});
+  await assertApplied({expectedHash:state.sourceSha256});
   expect(await readFile(path.join(root,"rug","base.png"))).toEqual(source);
   expect(bodies).toHaveLength(2);
  }finally{for(const res of held)res.destroy();provider.closeAllConnections();await new Promise<void>(resolve=>provider.close(()=>resolve()));child.kill("SIGTERM");if(child.exitCode===null)await once(child,"exit");await rm(root,{recursive:true,force:true});}
