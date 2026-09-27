@@ -7,6 +7,8 @@ export const WebpSettingsSchema = z.object({
 }).strict();
 export const MainImageSettingsSchema = z.object({
   cutoutId: z.string().uuid().optional(),
+  ignoredBatchCutoutId: z.string().uuid().optional(),
+  sourceRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   reviewedSourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   portrait: z.boolean().default(false),
   rotation: z.number().min(-180).max(180).default(0),

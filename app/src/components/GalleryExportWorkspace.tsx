@@ -45,7 +45,7 @@ import { FamilyShapeStatus } from "./FamilyShapeStatus";
 import "../gallery-workspace-v2.css";
 
 const SHAPES: ProductShape[] = ["area", "runner", "round"];
-const UTILITY_SHOTS = new Set(["refine_base", "shape_runner_base", "shape_round_base"]);
+const UTILITY_SHOTS = new Set(["top_down_base", "refine_base", "shape_runner_base", "shape_round_base"]);
 const emptyGenerated: GeneratedResponse = { active: [], trash: [], aggregates: {} };
 
 interface GalleryExportWorkspaceProps {
@@ -521,7 +521,7 @@ export function GalleryExportWorkspace({
           </div>
         </header>
 
-        {preparing ? <ExportPreparation products={products.filter(product => selectedIds.has(product.id))} value={preparation} onChange={setPreparation} onBack={() => setPreparing(false)} onContinue={format => { setPreparing(false); void exportSelected(format); }} /> : <>
+        {preparing ? <ExportPreparation products={products.filter(product => selectedIds.has(product.id))} value={preparation} onChange={setPreparation} onSourceChanged={async id => { galleryChanged(await getGallerySelection(id), false); onGalleryChanged?.(); }} onBack={() => setPreparing(false)} onContinue={format => { setPreparing(false); void exportSelected(format); }} /> : <>
         <div className="galleryExportBody">
           <aside className="galleryFamilyPanel">
             <div className="galleryPanelHeading">

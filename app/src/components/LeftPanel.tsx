@@ -210,7 +210,7 @@ export function LeftPanel({
 
 export function isBulkAcceptEligible(asset: LocatedAsset): boolean {
   return asset.status === "done" && asset.location === "generated" && Boolean(asset.output?.file)
-    && !["refine_base", "shape_runner_base", "shape_round_base"].includes(asset.shotId)
+    && !["top_down_base", "refine_base", "shape_runner_base", "shape_round_base"].includes(asset.shotId)
     && !asset.inputs.shapeVariant;
 }
 

@@ -22,7 +22,7 @@ export const CutoutApprovalSchema = z.object({ approved: z.boolean() }).strict()
 export interface MainImageCutout {
   id: string; productId: string; sourceSha256: string; outputSha256?: string;
   status: "processing" | "ready" | "failed"; approved: boolean; createdAt: string;
-  uncertainty: number | null; error: string | null; provider: "photoroom";
+  uncertainty: number | null; error: string | null; provider: "photoroom" | "manual"; parentId?: string;
 }
 const scheduler = new WorkScheduler(PHOTOROOM_PARALLEL_REQUESTS, 5000);
 // Bound CPU-heavy normalization independently from network concurrency.
