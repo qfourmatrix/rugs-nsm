@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { MainImageTools } from "../src/components/MainImageTools";
 import * as api from "../src/api";
-vi.mock("../src/api",()=>({ApiError:class extends Error{},applyTopDown:vi.fn(),cutoutPreviewUrl:vi.fn(()=>"/cutout"),generateTopDown:vi.fn(),getJobs:vi.fn(),getMainCutouts:vi.fn(),getTopDown:vi.fn(),imageUrl:vi.fn((id,kind,file)=>`/${id}/${kind}/${file}`),restoreCutout:vi.fn(),topDownOriginalUrl:vi.fn(()=>"/original")}));
+vi.mock("../src/api",()=>({ApiError:class extends Error{},downloadMainOriginalUrl:()=>"/download",replaceMainImage:vi.fn(),applyTopDown:vi.fn(),cutoutPreviewUrl:vi.fn(()=>"/cutout"),generateTopDown:vi.fn(),getJobs:vi.fn(),getMainCutouts:vi.fn(),getTopDown:vi.fn(),imageUrl:vi.fn((id,kind,file)=>`/${id}/${kind}/${file}`),restoreCutout:vi.fn(),topDownOriginalUrl:vi.fn(()=>"/original")}));
 (globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
 let root:Root,container:HTMLDivElement;const changed=vi.fn(),cutout=vi.fn();
 const button=(name:string)=>[...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent===name)!;

@@ -88,7 +88,7 @@ async function request<T>(path: string, init: RequestInit = {}, unchanged?: T): 
   const timeout = new AbortController();
   // Generation and export submissions must not expire while the server is processing them.
   // Read/poll timeouts only refresh the UI; they never cancel background jobs.
-  const timer = generation || exportSubmission ? undefined : window.setTimeout(() => timeout.abort(), 120000);
+  const timer = generation || exportSubmission || (init.method === "POST" && path.endsWith("/main-image/replace")) ? undefined : window.setTimeout(() => timeout.abort(), 120000);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
   try {
   const response = await fetch(path, {
@@ -613,3 +613,6 @@ export const cutoutPreviewUrl = (id:string) => `/api/gallery-exports/cutouts/${e
 export async function restoreCutout(id:string,points:import("../shared/main-image-tools").RestorePoint[],requestId:string):Promise<MainCutout> {
   return unwrap(await request(`/api/gallery-exports/cutouts/${encodeURIComponent(id)}/restore`,{method:"POST",body:JSON.stringify({points,requestId})}),["cutout"]);
 }
+
+export const downloadMainOriginalUrl=(productId:string)=>productPath(productId,"/main-image/download");
+export const replaceMainImage=(productId:string,expectedHash:string,data:string)=>request<{sourceSha256:string;cutout?:MainCutout}>(productPath(productId,"/main-image/replace"),{method:"POST",body:JSON.stringify({expectedHash,data})});

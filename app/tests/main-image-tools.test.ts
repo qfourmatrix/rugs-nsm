@@ -54,3 +54,18 @@ it("never replaces a missing original backup with a later image",async()=>{
  await expect(preserveMainOriginal(root,"rug")).rejects.toMatchObject({code:"ORIGINAL_MISSING"});
  expect(await readFile(path.join(root,"rug","base.png"))).toEqual(source);
 },60000);
+
+it("imports retouched images, preserves transparency, rejects bad uploads and restores the original",async()=>{
+ const saved=await preserveMainOriginal(root,"rug");
+ await expect(changeMainImage(root,"rug",saved.sha256,undefined,Buffer.from("not an image"))).rejects.toMatchObject({code:"INVALID_IMAGE"});
+ expect(await readFile(path.join(root,"rug","base.png"))).toEqual(source);
+ const upload=await sharp({create:{width:100,height:70,channels:4,background:{r:200,g:100,b:50,alpha:.5}}}).png().toBuffer();
+ const result=await changeMainImage(root,"rug",saved.sha256,undefined,upload);
+ expect(result.cutout).toMatchObject({approved:false,provider:"manual",sourceSha256:result.sourceSha256});
+ const resolved=await resolveCutout(root,"rug",result.cutout!.id,result.sourceSha256,false);
+ expect((await sharp(resolved.file).stats()).isOpaque).toBe(false);
+ expect(await readFile(saved.file)).toEqual(source);
+ await expect(changeMainImage(root,"rug",saved.sha256,undefined,upload)).rejects.toMatchObject({code:"SOURCE_CHANGED"});
+ await changeMainImage(root,"rug",result.sourceSha256);
+ expect(await readFile(path.join(root,"rug","base.png"))).toEqual(source);
+},60000);

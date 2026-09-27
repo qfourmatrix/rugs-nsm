@@ -1636,6 +1636,18 @@ app.post("/api/products/:productId/top-down", asyncRoute(async(req,res)=>{
   const jobIds=enqueueBatch({runId,productId:id,shot,prompt:TOP_DOWN_PROMPT,settings:{aspectRatio:"1:1",imageSize:"4K"},referenceImages:[],background:null,labelLogo:null,construction:null,parentAssetId:null,batchSize:1,attemptStart:nextAttemptForShot(generated,TOP_DOWN_SHOT_ID),sourceImage:{path:original.file,file:`preserved-original/${original.filename}`,mimeType:imageMimeType(original.filename)}});
   res.json({runId,jobIds});
 }));
+app.get("/api/products/:productId/main-image/download", asyncRoute(async(req,res)=>{
+  const file=await topDownOriginalPath(config.productRoot,req.params.productId as string);
+  res.setHeader("Cache-Control","no-store");res.download(file,`${req.params.productId}-original${path.extname(file)}`,{dotfiles:"allow"});
+}));
+app.post("/api/products/:productId/main-image/replace", asyncRoute(async(req,res)=>{
+  const id=req.params.productId as string;
+  const parsed=z.object({expectedHash:z.string().regex(/^[a-f0-9]{64}$/),data:z.string().min(4).max(56_000_000).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict().parse(req.body);
+  const batch=await cutoutBatches.get();
+  if(jobs.all().some(job=>job.productId===id&&["queued","generating"].includes(job.status))||batch?.items.some(item=>item.productId===id&&["queued","processing"].includes(item.status)))throw conflictError("MAIN_IMAGE_BUSY","Let this rug's active jobs finish before replacing its main image.");
+  await preserveMainOriginal(config.productRoot,id);
+  res.json(await changeMainImage(config.productRoot,id,parsed.expectedHash,undefined,Buffer.from(parsed.data,"base64")));
+}));
 app.post("/api/products/:productId/top-down/apply", asyncRoute(async(req,res)=>{
   const id=req.params.productId as string;
   const parsed=z.object({expectedHash:z.string().regex(/^[a-f0-9]{64}$/),assetId:z.string().min(1).max(240).optional()}).strict().parse(req.body);
