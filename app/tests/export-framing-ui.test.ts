@@ -158,3 +158,42 @@ it("retains a saved manual cutout and approval when reopening over an older batc
  await act(async()=>vi.advanceTimersByTimeAsync(350));
  expect(latest.mainImages['rug-0']).toEqual(saved);
 });
+
+it("reuses WebP previews across zoom and returning to the same detail", async () => {
+ await act(async()=>root.render(createElement(Harness)));
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ await act(async()=>button("2. WebP quality").click());
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ const count = vi.mocked(api.previewGalleryExport).mock.calls.length;
+ const zoom = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input=>input.parentElement?.textContent?.includes("View at 100%"))!;
+ await act(async()=>zoom.click());
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ expect(api.previewGalleryExport).toHaveBeenCalledTimes(count);
+ await act(async()=>button("Collection layout").click());
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ await act(async()=>button("Image detail").click());
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ expect(api.previewGalleryExport).toHaveBeenCalledTimes(count);
+ await act(async()=>button("Update preview").click());
+ expect(api.previewGalleryExport).toHaveBeenCalledTimes(count + 1);
+});
+
+it("backs off idle batch polling", async () => {
+ await act(async()=>root.render(createElement(Harness)));
+ await act(async()=>vi.advanceTimersByTimeAsync(14000));
+ expect(api.getCutoutBatch).toHaveBeenCalledTimes(1);
+ await act(async()=>vi.advanceTimersByTimeAsync(1000));
+ expect(api.getCutoutBatch).toHaveBeenCalledTimes(2);
+});
+
+it("does not resubmit unchanged in-flight collection images after a rotation", async () => {
+ const pending: Array<()=>void> = [];
+ vi.mocked(api.previewGalleryExport).mockImplementation(()=>new Promise(resolve=>pending.push(()=>resolve({image:"data:image/png;base64,AA==",reference:"",width:600,height:600,sourceBytes:100,outputBytes:50,sourceSha256:"a".repeat(64)}))));
+ await act(async()=>root.render(createElement(Harness)));
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ expect(api.previewGalleryExport).toHaveBeenCalledTimes(2);
+ await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Rotate family-2 area right"]')!.click());
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ expect(api.previewGalleryExport).toHaveBeenCalledTimes(2);
+ await act(async()=>{ while (pending.length) { pending.shift()!(); await Promise.resolve(); await Promise.resolve(); } });
+});
