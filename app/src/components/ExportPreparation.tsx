@@ -57,6 +57,8 @@ export function ExportPreparation({ products: inputProducts, value, onChange: up
   const [sharedCanvas, setSharedCanvas] = useState(() => { const initial = value.mainImages[products[0]?.id] ?? DEFAULT_MAIN_IMAGE; return { occupancy: initial.occupancy, background: initial.background, transparent: !!initial.transparent }; });
   const [collectionPreviews, setCollectionPreviews] = useState<Array<{ id: string; image: string; key: string; sourceSha256: string }>>([]);
   const previewCache = useRef(new Map<string, { id: string; image: string; key: string; sourceSha256: string }>());
+  const detailCache = useRef(new Map<string, ExportPreview>());
+  const layoutRequests = useRef(new Map<string, Promise<ExportPreview>>());
   const [sourceHashes, setSourceHashes] = useState<Record<string, string | null>>({});
   const [zoom, setZoom] = useState(false);
   const [approvals, setApprovals] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(value.mainImages).filter(([, settings]) => settings.reviewedSourceSha256).map(([id, settings]) => [id, JSON.stringify(settings)])));
@@ -68,7 +70,7 @@ export function ExportPreparation({ products: inputProducts, value, onChange: up
   const product = products.find(item => item.id === productId) ?? products[0];
   const main = value.mainImages[productId] ?? DEFAULT_MAIN_IMAGE;
   const settingsKey = (settings?: MainImageSettings) => JSON.stringify(settings ? { ...settings, reviewedSourceSha256: undefined } : null);
-  const previewKey = JSON.stringify([step, zoom, productId, assetId, step === "webp" ? value.webp : null, settingsKey(value.mainImages[productId])]);
+  const previewKey = JSON.stringify([step, step === "main" && zoom, productId, assetId, (step === "webp" || zoom) ? value.webp : null, settingsKey(value.mainImages[productId])]);
   const collectionKey = JSON.stringify(products.map(product => [product.id, settingsKey(value.mainImages[product.id])]));
   const current = preview?.key === previewKey;
   const selectedCutout = cutouts.find(cutout => cutout.id === main.cutoutId);
@@ -89,7 +91,7 @@ export function ExportPreparation({ products: inputProducts, value, onChange: up
   const batchReady = batch?.items.filter(item => item.status === "ready").length ?? 0;
   const batchFailed = batch?.items.filter(item => item.status === "failed" || item.status === "attention").length ?? 0;
   const syncBatch = (next: CutoutBatch | null) => {
-    setBatch(next);
+    setBatch(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
     if (!next) return;
     const latest = valueRef.current;
     const mainImages = { ...latest.mainImages };
@@ -109,9 +111,10 @@ export function ExportPreparation({ products: inputProducts, value, onChange: up
   useEffect(() => {
     let alive = true; let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try { const next = await getCutoutBatch(); if (alive) syncBatch(next); }
+      let delay = 15000;
+      try { const next = await getCutoutBatch(); if (alive) syncBatch(next); if (next?.status === "running" || next?.items.some(item => item.status === "processing")) delay = 1500; }
       catch (error) { if (alive) setError(getErrorMessage(error)); }
-      finally { if (alive) timer = setTimeout(() => void poll(), 1500); }
+      finally { if (alive) timer = setTimeout(() => void poll(), delay); }
     };
     void poll(); return () => { alive = false; clearTimeout(timer); };
   }, [products.map(product => product.id).join("|")]);
@@ -130,7 +133,8 @@ export function ExportPreparation({ products: inputProducts, value, onChange: up
     requestRef.current?.abort();
     const controller = new AbortController(); requestRef.current = controller;
     setBusy(true); setError(null);
-    if (refresh && collection) { previewCache.current.clear(); setCollectionPreviews([]); }
+    if (refresh) { detailCache.current.clear(); }
+    if (refresh && collection) { previewCache.current.clear(); layoutRequests.current.clear(); }
     try {
       if (collection) {
         const targets = products;
@@ -147,10 +151,20 @@ export function ExportPreparation({ products: inputProducts, value, onChange: up
           while (index < missing.length && !controller.signal.aborted) {
             const product = missing[index++]; const key = settingsKey(snapshot.mainImages[product.id]);
             try {
-            const result = await previewGalleryExport(product.id, undefined, { ...snapshot, mainImages: snapshot.mainImages[product.id] ? { [product.id]: snapshot.mainImages[product.id] } : {} }, controller.signal, "layout");
-            if (controller.signal.aborted) return;
+            // A settings change stops consuming stale results, but reuses unchanged
+            // work already running on the server instead of submitting it again.
+            const requestKey = JSON.stringify([product.id, key]);
+            let request = layoutRequests.current.get(requestKey);
+            if (!request) {
+              request = previewGalleryExport(product.id, undefined, { ...snapshot, mainImages: snapshot.mainImages[product.id] ? { [product.id]: snapshot.mainImages[product.id] } : {} }, undefined, "layout");
+              layoutRequests.current.set(requestKey, request);
+              const release = () => { if (layoutRequests.current.get(requestKey) === request) layoutRequests.current.delete(requestKey); };
+              void request.then(release, release);
+            }
+            const result = await request;
             const item = { id: product.id, image: result.image, key, sourceSha256: result.sourceSha256 };
-            previewCache.current.set(product.id, item);
+            if (!controller.signal.aborted || settingsKey(valueRef.current.mainImages[product.id]) === key) previewCache.current.set(product.id, item);
+            if (controller.signal.aborted) return;
             setSourceHashes(previous => ({ ...previous, [product.id]: result.sourceSha256 }));
             setCollectionPreviews(previous => [...previous.filter(value => value.id !== item.id), item]);
             } catch (error) { if (!controller.signal.aborted) { setSourceHashes(previous => ({ ...previous, [product.id]: null })); setError(`${product.familyId} ${product.shape}: ${getErrorMessage(error)}`); } }
@@ -159,14 +173,24 @@ export function ExportPreparation({ products: inputProducts, value, onChange: up
         await Promise.all([worker(), worker()]);
         return;
       }
-      const result = await previewGalleryExport(productId, assetId || undefined, value, controller.signal, step === "main" && !zoom ? "layout" : "webp");
+      const result = (!refresh && detailCache.current.get(previewKey)) || await previewGalleryExport(productId, assetId || undefined, value, controller.signal, step === "main" && !zoom ? "layout" : "webp");
+      if (!controller.signal.aborted) {
+        detailCache.current.delete(previewKey);
+        detailCache.current.set(previewKey, result);
+        // Bound decoded data-URL storage while keeping recent comparisons instant.
+        let size = [...detailCache.current.values()].reduce((sum, item) => sum + item.image.length + item.reference.length, 0);
+        for (const [key, item] of detailCache.current) {
+          if (size <= 24 * 1024 * 1024) break;
+          detailCache.current.delete(key); size -= item.image.length + item.reference.length;
+        }
+      }
       if (!controller.signal.aborted) { setPreview({ key: previewKey, result }); if (!assetId) setSourceHashes(previous => ({ ...previous, [productId]: result.sourceSha256 })); }
     } catch (error) { if (!controller.signal.aborted) { if (!assetId) setSourceHashes(previous => ({ ...previous, [productId]: null })); setError(getErrorMessage(error)); } }
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
   // Only local previews refresh automatically. Provider submissions always require a click.
   useEffect(() => {
-    const timer = setTimeout(() => void makePreview(), 350);
+    const timer = setTimeout(() => void makePreview(), !collection && detailCache.current.has(previewKey) ? 0 : 350);
     return () => { clearTimeout(timer); requestRef.current?.abort(); };
   }, [collection ? collectionKey : previewKey, collection]);
   const approveAll = async () => {
