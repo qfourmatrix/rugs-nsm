@@ -150,3 +150,11 @@ it("retains successful bulk approvals after an error and rejects settings change
  expect(container.textContent).toContain("cutout changed");
  expect(api.removeMainBackground).not.toHaveBeenCalled();
 });
+it("retains a saved manual cutout and approval when reopening over an older batch",async()=>{
+ const old=crypto.randomUUID(),manual=crypto.randomUUID();
+ const saved={...DEFAULT_MAIN_IMAGE,cutoutId:manual,rotation:90,frame:true,reviewedSourceSha256:'a'.repeat(64)};
+ vi.mocked(api.getCutoutBatch).mockResolvedValue({id:crypto.randomUUID(),status:'completed',updatedAt:new Date().toISOString(),items:[{productId:'rug-0',requestId:crypto.randomUUID(),status:'ready',cutoutId:old}]} as never);
+ await act(async()=>root.render(createElement(Harness,{items:[products[0]],initial:{...DEFAULT_PREPARATION,mainImages:{'rug-0':saved}}})));
+ await act(async()=>vi.advanceTimersByTimeAsync(350));
+ expect(latest.mainImages['rug-0']).toEqual(saved);
+});

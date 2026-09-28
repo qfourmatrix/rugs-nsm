@@ -144,3 +144,15 @@
 .rugTopDownCompare img { width: 100%; aspect-ratio: 1; object-fit: contain; }
 .rugTopDownCompare figcaption { margin-bottom: 6px; font-size: 12px; }
 .mainImageTools button { min-height: 44px; }
+
+.exportSizeSummary { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 20px; margin:8px 0 12px; padding:12px 14px; background:var(--surface,#fff); border:1px solid var(--border,#d5d8e0); border-radius:6px; }
+.exportSizeSummary strong { font-size:20px; color:var(--text,#20242b); }
+.exportSizeSummary span,.exportInspectHint { font-size:12px; color:var(--muted,#59616d); }
+.exportInspection figcaption { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:6px; }
+.exportInspection figcaption strong { font-size:18px; color:var(--text,#20242b); }
+.exportInspection figcaption small { font-size:11px; font-weight:400; }
+.exportInspection .exportInspectPane { overflow:hidden; cursor:zoom-in; touch-action:pan-y; }
+.exportInspection .exportInspectPane:focus-visible { outline:2px solid #0064d2; outline-offset:3px; }
+.exportInspection.isInspecting .exportInspectPane { cursor:crosshair; }
+.exportInspection.isInspecting img { transform:scale(3); transform-origin:var(--inspect-x,50%) var(--inspect-y,50%); }
+.exportInspection .isActualSize .exportInspectPane { overflow:auto; cursor:default; }

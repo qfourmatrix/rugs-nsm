@@ -34,3 +34,9 @@ Validation: 366 tests / 65 files and production build pass. File-backed tests ve
 Image detail includes **Download original**, **Replace image**, and **Restore original image**. Download returns the preserved original bytes. Choose a retouched PNG, JPEG or WebP, inspect its preview, then press **Use this image**. Single images up to 40 MB / 40 megapixels are accepted; invalid images and stale-source replacements are rejected. Active work for that rug must finish first.
 
 The original and replaced versions are retained. Transparent uploads also become a saved, unapproved manual cutout, preserving alpha even when the original base filename is JPEG. Export preparation selects that cutout without calling Photoroom. Opaque uploads become the new base and may be exported after review or have their backgrounds removed separately. Replacement resets old approval and keeps the shape selected for review. Other gallery revisions retain existing deselection behavior.
+
+## WebP inspection and update persistence
+
+The WebP comparison supports synchronized 3× hover zoom in both panes. Pointer movement changes the inspected position without rendering new images or submitting provider calls. Click/tap holds zoom; arrows move it and Escape resets. Existing View at 100% remains available for native-pixel inspection. Output size and dimensions are prominent; each pane shows its file size, and stale output sizes explicitly say previous preview until refresh completes.
+
+Main-image settings and source review hashes retain the existing browser draft key; catalog cutouts and approvals remain on disk. Reopening retains a saved manual/alternate cutout instead of replacing it with an older batch result. The same browser profile and origin are needed to recover browser settings; the wizard step, selection and preview cache may need reopening/rebuilding. No catalog migration or draft-key change is introduced.
