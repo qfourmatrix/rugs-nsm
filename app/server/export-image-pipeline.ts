@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp, { type Sharp } from "sharp";
 import type { MainImageSettings, WebpSettings } from "../shared/export-preparation";
 
 // A single pipeline powers both the real preview and the archived WebP.
@@ -37,12 +37,23 @@ export async function prepareExportImage(source: string | Buffer, settings?: Mai
 }
 
 export async function encodeExportImage(source: string | Buffer, webp: WebpSettings, main?: MainImageSettings, format: "webp" | "png" = "webp") {
+  if (!main) {
+    // Keep the same decoded sRGB pixels as preparation, without encoding and
+    // decoding a full-resolution PNG for every generated gallery image. The
+    // decode boundary also prevents shrink-on-load changing preview pixels.
+    const decoded = await sharp(source, { failOn: "error" }).autoOrient().toColourspace("srgb").raw().toBuffer({ resolveWithObject: true });
+    return encodePipeline(sharp(decoded.data, { raw: decoded.info }), webp, format);
+  }
   const prepared = await prepareExportImage(source, main);
   return encodePreparedExportImage(prepared, webp, format);
 }
 
 export function encodePreparedExportImage(prepared: Buffer, webp: WebpSettings, format: "webp" | "png" = "webp") {
-  const resized = sharp(prepared).resize({ width: webp.maximumDimension, height: webp.maximumDimension, fit: "inside", withoutEnlargement: true });
+  return encodePipeline(sharp(prepared), webp, format);
+}
+
+function encodePipeline(pipeline: Sharp, webp: WebpSettings, format: "webp" | "png") {
+  const resized = pipeline.resize({ width: webp.maximumDimension, height: webp.maximumDimension, fit: "inside", withoutEnlargement: true });
   if (format === "png") return resized.png({ compressionLevel: 9 }).toBuffer({ resolveWithObject: true });
   return resized.webp({ preset: "photo", quality: webp.quality, lossless: webp.lossless, effort: 6, smartSubsample: true }).toBuffer({ resolveWithObject: true });
 }
