@@ -92,7 +92,9 @@ describe("curated Shopify gallery exports", () => {
     const secondProduct = await makeSquareProduct("cancel-rug-two", 256);
     const secondHash = await sha256File(path.join(secondProduct.productDir, "base.png"));
     const registry = new GalleryExportRegistry(productRoot);
-    const first = registry.start(["cancel-rug", "cancel-rug-two"]);
+    const extraIds = Array.from({ length: 6 }, (_, i) => `cancel-extra-${i}`);
+    for (const id of extraIds) await makeSquareProduct(id, 256);
+    const first = registry.start(["cancel-rug", "cancel-rug-two", ...extraIds]);
     const second = registry.start(["cancel-rug"]);
     registry.cancel(second.exportId);
     await new Promise(resolve => setTimeout(resolve, 0));

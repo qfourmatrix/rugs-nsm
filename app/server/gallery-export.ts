@@ -34,7 +34,8 @@ const EXPORT_RECEIPTS_DIR = "export-receipts";
 const MAX_SHOPIFY_BYTES = 20_971_520;
 const MAX_SHOPIFY_DIMENSION = 4096;
 const UNDERSIZED_WARNING_DIMENSION = 2048;
-const conversionScheduler = new WorkScheduler(2, 16);
+const EXPORT_CONCURRENCY = 8;
+const conversionScheduler = new WorkScheduler(EXPORT_CONCURRENCY, 16);
 const inspectionScheduler = new WorkScheduler(1, 8);
 const conversionCache = new Map<string, { file: string; sha256: string; info: { width: number; height: number }; bytes: number; touched: number }>();
 const conversionCacheSession = `export_cache_${randomUUID()}`;
@@ -552,11 +553,11 @@ export async function buildGalleryExport({
       images: imageReceipts
     });
   };
-  // Keep only two shapes in flight; settle both before cancellation cleanup
+  // Keep a bounded group of shapes in flight; settle all before cancellation cleanup
   // so a sibling conversion cannot recreate files after the job is removed.
-  for (let offset = 0; offset < inspected.length; offset += 2) {
+  for (let offset = 0; offset < inspected.length; offset += EXPORT_CONCURRENCY) {
     signal?.throwIfAborted();
-    const results = await Promise.allSettled(inspected.slice(offset, offset + 2).map(buildShape));
+    const results = await Promise.allSettled(inspected.slice(offset, offset + EXPORT_CONCURRENCY).map(buildShape));
     const failed = results.find(result => result.status === "rejected");
     if (failed?.status === "rejected") throw failed.reason;
   }
