@@ -3,6 +3,8 @@ import sharp from "sharp";
 import { encodeExportImage, encodePreparedExportImage, prepareExportImage } from "../server/export-image-pipeline";
 import { DEFAULT_WEBP } from "../shared/export-preparation";
 
+// This matrix performs 32 real encodes. Allow slower recipient Macs to
+// complete byte-parity checks; this does not set an application timeout.
 it("skips the PNG intermediary without changing orientation, alpha, colors or encoded output", async () => {
   const width = 380, height = 270;
   const pixels = Buffer.alloc(width * height * 4);
@@ -27,4 +29,4 @@ it("skips the PNG intermediary without changing orientation, alpha, colors or en
     expect(actual.info).toEqual(expected.info);
     expect(actual.data).toEqual(expected.data);
   }
-});
+}, 60_000);
