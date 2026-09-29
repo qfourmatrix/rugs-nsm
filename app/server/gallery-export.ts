@@ -4,7 +4,7 @@ import { encodeExportImage, encodePreparedExportImage, prepareExportImage } from
 import { createWriteStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { ZipArchive, type Archiver, type EntryData } from "archiver";
+import { ZipArchive, type Archiver, type EntryData, type ZipEntryData } from "archiver";
 import sharp from "sharp";
 import type {
   AssetRecord,
@@ -487,7 +487,7 @@ export async function buildGalleryExport({
 
   const receiptShapes: GalleryExportShapeReceipt[] = [];
   const fileEntries: Array<{ sourcePath: string; archivePath: string }> = [];
-  for (const candidate of inspected) {
+  const buildShape = async (candidate: InspectedShape) => {
     if (candidate.summary.status === "skipped") {
       receiptShapes.push({
         productId: candidate.product.id,
@@ -499,7 +499,7 @@ export async function buildGalleryExport({
         issues: candidate.summary.issues,
         images: []
       });
-      continue;
+      return;
     }
 
     const familySegment = archiveSegment(candidate.product.familyId, "family");
@@ -551,7 +551,17 @@ export async function buildGalleryExport({
       issues: candidate.summary.issues,
       images: imageReceipts
     });
+  };
+  // Keep only two shapes in flight; settle both before cancellation cleanup
+  // so a sibling conversion cannot recreate files after the job is removed.
+  for (let offset = 0; offset < inspected.length; offset += 2) {
+    signal?.throwIfAborted();
+    const results = await Promise.allSettled(inspected.slice(offset, offset + 2).map(buildShape));
+    const failed = results.find(result => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
   }
+  const selectedOrder = new Map(inspected.map((candidate, index) => [candidate.product.id, index]));
+  receiptShapes.sort((a, b) => selectedOrder.get(a.productId)! - selectedOrder.get(b.productId)!);
 
   const completedAt = new Date().toISOString();
   const selectedFamilies = new Set(inspected.map((candidate) => candidate.product.familyId));
@@ -581,7 +591,10 @@ export async function buildGalleryExport({
   const archive = new ZipArchive({ zlib: { level: 9 } });
   archive.pipe(output);
   archive.append(`${JSON.stringify(manifest, null, 2)}\n`, { name: "export-manifest.json" });
-  for (const entry of fileEntries) archive.file(entry.sourcePath, { name: entry.archivePath });
+  for (const entry of fileEntries) {
+    const zipEntry: ZipEntryData = { name: entry.archivePath, store: true };
+    archive.file(entry.sourcePath, zipEntry);
+  }
   archive.on("entry", (entry: EntryData) => {
     if (entry.name === "export-manifest.json") return;
     completed += 1;

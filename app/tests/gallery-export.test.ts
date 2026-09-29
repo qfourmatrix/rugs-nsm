@@ -63,6 +63,7 @@ describe("curated Shopify gallery exports", () => {
     const progress: string[] = [];
     const result = await buildGalleryExport({ productRoot, productIds, exportId: "export_large", onProgress: value => progress.push(value.message) });
     expect(result.receipt.includedShapes).toBe(70);
+    expect(result.receipt.shapes.map(shape => shape.productId)).toEqual(productIds);
     expect(galleryConversionMetrics().encodes - before).toBe(70);
     expect(progress.filter(message => message.startsWith("Optimized "))).toHaveLength(70);
   }, 30000);
@@ -88,8 +89,10 @@ describe("curated Shopify gallery exports", () => {
   it("cancels queued and active exports without changing source files", async () => {
     const { productDir } = await makeSquareProduct("cancel-rug", 256);
     const originalHash = await sha256File(path.join(productDir, "base.png"));
+    const secondProduct = await makeSquareProduct("cancel-rug-two", 256);
+    const secondHash = await sha256File(path.join(secondProduct.productDir, "base.png"));
     const registry = new GalleryExportRegistry(productRoot);
-    const first = registry.start(["cancel-rug"]);
+    const first = registry.start(["cancel-rug", "cancel-rug-two"]);
     const second = registry.start(["cancel-rug"]);
     registry.cancel(second.exportId);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -102,6 +105,7 @@ describe("curated Shopify gallery exports", () => {
     expect(registry.get(second.exportId).status).toBe("cancelled");
     expect(registry.get(first.exportId).status).toBe("cancelled");
     expect(await sha256File(path.join(productDir, "base.png"))).toBe(originalHash);
+    expect(await sha256File(path.join(secondProduct.productDir, "base.png"))).toBe(secondHash);
     expect(await listGalleryExportReceipts(productRoot)).toEqual([]);
     for (const job of [first, second]) await expect(fs.access(path.join(productRoot, ".product-shot-queue", "export-jobs", job.exportId))).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -219,6 +223,8 @@ describe("curated Shopify gallery exports", () => {
 
     const { stdout: list } = await execFileAsync("unzip", ["-Z1", result.archivePath]);
     expect(list).toContain("export-manifest.json");
+    const { stdout: zipDetails } = await execFileAsync("unzip", ["-lv", result.archivePath]);
+    expect(zipDetails.split("\n").filter(line => /\.(png|webp)$/.test(line)).every(line => line.includes("Stored"))).toBe(true);
     expect(list).toContain("rug-good/area/originals/base.png");
     expect(list).toContain("rug-good/area/originals/detail-a.png");
     expect(list).toContain("rug-good/area/shopify/rug-good-area-01-main.webp");
